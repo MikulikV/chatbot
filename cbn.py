@@ -56,15 +56,24 @@ select_top_k = pn.widgets.IntSlider(
     value=4, 
     styles={"font-size": "16px", "margin-bottom": "30px"}
 )
-setup_button = pn.widgets.Button(name="Save settings", button_type="success", styles={"margin": "0 auto"})
+save_button = pn.widgets.Button(
+    name="Save settings", 
+    button_type="success", 
+    width=120,
+    height=35
+)
+edit_button = pn.widgets.Button(
+    name="Edit settings", 
+    button_type="warning", 
+    width=120,
+    height=35
+)
 
 # Main layout
-title = pn.pane.HTML(
-    object=f"<h2>{menu.value}</h2>"
-)
+title = pn.pane.HTML(object=f"<h2>{menu.value}</h2>")
 # Conversation window
 question = pn.widgets.TextInput(
-    value="", placeholder="Send a message ...", width=720, height=40, toolbar=False,
+    value="", placeholder="Send a message", width=720, height=40
 )
 send_button = pn.widgets.Button(name="Send", width=80, height=40)
 clearhistory_button = pn.widgets.Button(name="Clear History", button_type="warning")
@@ -95,39 +104,31 @@ def load_db(source_directory, search_type, chain_type, k, temperature):
     return qa
 
 
-class chatbot(param.Parameterized):
+class Chatbot(param.Parameterized):
     chat_history = param.List([])
     answer = param.String("")
+    panels = param.List([])
     db_query  = param.String("")
     db_response = param.List([])
     
-    def __init__(self,  **params):
-        super(chatbot, self).__init__( **params)
-        self.panels = []
+    def __init__(self, **params):
+        super(Chatbot, self).__init__(**params)
         self.source_directory = "docs"
-        self.qa = load_db(self.source_directory ,select_search_type.value, select_chain_type.value, select_top_k.value, select_temperature.value)
+        self.qa = load_db(self.source_directory, select_search_type.value, select_chain_type.value, select_top_k.value, select_temperature.value)
 
     def convchain(self, query):
-        if not query:
-            return pn.widgets.ChatBox(
-                value=self.panels,
-                message_icons={
-                    "You": "assets/user.png",
-                    "Gizmo": "assets/gizmo.png",
-                },
-                show_names=False,
-                allow_input=False,
-            )
-        result = self.qa({"question": query, "chat_history": self.chat_history})
-        self.chat_history.extend([(query, result["answer"])])
-        self.db_query = result["generated_question"]
-        self.db_response = result["source_documents"]
-        self.answer = result['answer'] 
-        self.panels.extend([
-            {"You": query},
-            {"Gizmo": self.answer},
-        ])
-        question.value = ''  #clears loading indicator when cleared
+        if query:
+            result = self.qa({"question": query, "chat_history": self.chat_history})
+            self.chat_history.extend([(query, result["answer"])])
+            self.db_query = result["generated_question"]
+            self.db_response = result["source_documents"]
+            self.answer = result['answer'] 
+            self.panels.extend([
+                {"You": query},
+                {"Gizmo": self.answer},
+            ])
+            question.value = ''
+
         return pn.widgets.ChatBox(
             value=self.panels,
             message_icons={
@@ -138,20 +139,19 @@ class chatbot(param.Parameterized):
             allow_input=False,
         )
         
-
-    @param.depends('db_query')
+    @param.depends('clr_history')
     def get_lquest(self):
-        if not self.db_query :
+        if not self.db_query:
             return pn.Column(
-                pn.Row(pn.pane.Markdown(f"Last question to DB:", styles={'background-color': '#F6F6F6'})),
+                pn.Row(pn.pane.Markdown(f"Last question to DB:")),
                 pn.Row(pn.pane.Str("no DB accesses so far"))
             )
         return pn.Column(
-            pn.Row(pn.pane.Markdown(f"DB query:", styles={'background-color': '#F6F6F6'})),
+            pn.Row(pn.pane.Markdown(f"DB query:")),
             pn.pane.Str(self.db_query)
         )
 
-    @param.depends('db_response')
+    @param.depends('clr_history')
     def get_sources(self):
         if not self.db_response:
             return 
@@ -160,7 +160,7 @@ class chatbot(param.Parameterized):
             rlist.append(pn.Row(pn.pane.Str(doc)))
         return pn.WidgetBox(*rlist, scroll=True)
 
-    @param.depends('convchain', 'clr_history') 
+    @param.depends('clr_history') 
     def get_chats(self):
         if not self.chat_history:
             return pn.WidgetBox(pn.Row(pn.pane.Str("No History Yet")), scroll=True)
@@ -169,12 +169,14 @@ class chatbot(param.Parameterized):
             rlist.append(pn.Row(pn.pane.Str(exchange)))
         return pn.WidgetBox(*rlist, width=600, scroll=True)
 
-    def clr_history(self,count=0):
+    def clr_history(self, count=0):
         self.chat_history = []
+        self.db_query = ""
+        self.db_response = []
+        self.panels = []
         return 
 
-cbn = chatbot()
-
+cbn = Chatbot()
 
 clearhistory_button.on_click(cbn.clr_history)
 
@@ -182,19 +184,18 @@ conversation = pn.bind(cbn.convchain, question)
 
 chat_box = pn.Column(
     pn.Row(question, send_button),
-    pn.panel(conversation,  loading_indicator=True, height=300)
+    pn.panel(conversation, loading_indicator=True, height=300)
 )
 database = pn.Column(
     pn.panel(cbn.get_lquest),
     pn.layout.Divider(),
-    pn.panel(cbn.get_sources ),
+    pn.panel(cbn.get_sources),
 )
 chat_history = pn.Column(
     pn.panel(cbn.get_chats),
     pn.layout.Divider(),
     clearhistory_button,
 )
-
 
 layout = pn.Column(
     title,
@@ -205,7 +206,7 @@ def switch_layout( event):
     layout[0].object = f"<h2>{event.new}</h2>"
     layout[1] = chat_history if event.new == "Chat history" else (database if event.new == "Database" else chat_box)
 
-watcher = menu.param.watch(switch_layout, 'value')
+menu.param.watch(switch_layout, 'value')
 
 
 
@@ -221,7 +222,7 @@ template = pn.template.FastGridTemplate(
             pn.pane.HTML("Search type:", styles={"font-size": "16px", "margin-bottom": "0"}),
             select_search_type,
             select_top_k,
-            setup_button,
+            pn.Row(edit_button, save_button, styles={"margin": "0 auto"}),
             margin=10
         )
     ],
