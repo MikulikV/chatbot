@@ -12,20 +12,12 @@ import param
 
 from dotenv import load_dotenv 
 
-
+# OPENAI_API_KEY
 load_dotenv()
 
 # WIDGETS
 
 # Sidebar
-# menu to switch main template
-menu = pn.widgets.RadioButtonGroup(
-    name="Menu", 
-    options=['Conversation', 'Database', "Chat history"],
-    button_type="primary",
-    button_style="outline",
-    styles={"margin-bottom": "20px"}
-)
 select_temperature = pn.widgets.FloatSlider(
     name="Temperature", 
     start=0.0, 
@@ -57,37 +49,38 @@ select_top_k = pn.widgets.IntSlider(
     styles={"font-size": "16px", "margin-bottom": "30px"}
 )
 save_button = pn.widgets.Button(
-    name="Save", 
+    name="Save and start", 
     button_type="success", 
-    width=100,
-    height=35
-)
-edit_button = pn.widgets.Button(
-    name="Edit", 
-    button_type="warning", 
-    width=100,
-    height=35,
-    disabled=True
+    width=150,
+    height=35, 
+    styles={"margin": "0 auto"}
 )
 
 # Main layout
-title = pn.pane.HTML(object=f"<h2>{menu.value}</h2>")
-# Conversation window
-question = pn.widgets.TextInput(
-    value="", placeholder="Send a message", width=720, height=40, disabled=True
+menu = pn.widgets.RadioButtonGroup(
+    name="Menu", 
+    options=['Conversation', 'Database', "Chat history"],
+    button_type="primary",
+    button_style="outline",
+    disabled=True,
+    styles={"margin-bottom": "10px"}
 )
+ui = pn.Column(
+    pn.Column(
+        pn.pane.HTML("<h1>To start conversation set up your settings</h1>", width=820, styles={"text-align": "center"}),
+        pn.pane.Image("assets/gizmo.png", width=200, height=200, styles={"margin": "0 auto"}),
+    )
+)
+# Conversation window
+question = pn.widgets.TextInput(value="", placeholder="Send a message", width=720, height=40, disabled=True)
 send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
-clearhistory_button = pn.widgets.Button(name="Clear History", button_type="warning")
+chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML())
+# Database window
+database = pn.Row(pn.pane.HTML("No database yet"))
+# Chat history window
+chat_history = pn.Row(pn.pane.HTML("No history yet"))
 
-def save(event):
-    for widget in [question, send_button, save_button, edit_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
-        widget.disabled = not widget.disabled
-
-save_button.on_click(save)
-edit_button.on_click(save)
-
-
-# Create a CBN Chat chain
+# Define a CBN Chat chain
 def load_db(source_directory, search_type, chain_type, k, temperature):
     # load documents
     loader = DirectoryLoader(source_directory, glob="**/*.pdf", loader_cls=PyMuPDFLoader)
@@ -111,7 +104,7 @@ def load_db(source_directory, search_type, chain_type, k, temperature):
     )
     return qa
 
-
+# Define CBN class
 class Chatbot(param.Parameterized):
     chat_history = param.List([])
     answer = param.String("")
@@ -139,6 +132,7 @@ class Chatbot(param.Parameterized):
                 {"You": query},
                 {"Gizmo": self.answer},
             ])
+            question.value = ""
 
         return pn.widgets.ChatBox(
             value=self.panels,
@@ -150,17 +144,20 @@ class Chatbot(param.Parameterized):
             allow_input=False,
         )
     
-    def get_lquest(self):
+    @param.depends('db_query')
+    def get_last_question(self):
         if not self.db_query:
             return pn.Column(
-                pn.Row(pn.pane.Markdown(f"Last question to DB:")),
-                pn.Row(pn.pane.Str("no DB accesses so far"))
+                pn.pane.HTML("<h2>There is no information retrieved from your database</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         return pn.Column(
             pn.Row(pn.pane.Markdown(f"DB query:")),
-            pn.pane.Str(self.db_query)
+            pn.pane.Str(self.db_query),
         )
 
+    @param.depends('db_response')
     def get_sources(self):
         if not self.db_response:
             return 
@@ -169,77 +166,53 @@ class Chatbot(param.Parameterized):
             rlist.append(pn.Row(pn.pane.Str(doc)))
         return pn.WidgetBox(*rlist, scroll=True)
     
-    def get_chats(self):
+    def get_history(self):
         if not self.chat_history:
-            return pn.WidgetBox(pn.Row(pn.pane.Str("No History Yet")), scroll=True)
+            return pn.Column(
+                pn.pane.HTML("<h2>There is no chat history</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
+            )
         rlist=[pn.Row(pn.pane.Markdown(f"Current Chat History variable"))]
         for exchange in self.chat_history:
             rlist.append(pn.Row(pn.pane.Str(exchange)))
         return pn.WidgetBox(*rlist, width=600, scroll=True)
 
-    def clr_history(self, count=0):
-        self.chat_history = []
-        self.db_query = ""
-        self.db_response = []
-        self.panels = []
-        return 
-
-
 cbn = None
 
-chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
-database = pn.Row(pn.pane.Str("no DB accesses so far"))
-chat_history = pn.Row(pn.pane.Str("No History Yet"))
+# Callback to create a CBN object
+def start(event):
+    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
+        widget.disabled = not widget.disabled
 
-menu_items = [('Conversation', 'Conversation'), ('Database', 'Database'), ('Chat history', 'Chat history')]
-menu_button = pn.widgets.MenuButton(name='Conversation', split=True, items=menu_items, button_type='primary', width=150)
+    global cbn
+    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
+    chat_box = pn.bind(cbn.conversation, question)
+    chat[1] = pn.panel(chat_box, loading_indicator=True, height=300)
+    database[0] = pn.Column(
+        pn.panel(cbn.get_last_question),
+        pn.panel(cbn.get_sources),
+    )
+    chat_history[0] = pn.Column(
+        pn.panel(cbn.get_history),
+    )
+    menu.value = menu.value
+ 
+save_button.on_click(start)
 
-ui = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
-
+# Callback to switch between chat, database and history
 def switch_ui(event):
     ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else chat_history)
-    ui[1] = None
-    
-def switch_menu_name(event):
-    menu_button.name = event.new
 
-menu_button.on_click(switch_menu_name)
-menu_button.param.watch(switch_ui, "name", onlychanged=False)
+# Watcher to look after menu.value
+menu.param.watch(switch_ui, "value", onlychanged=False)
 
-def start(event):
-    global cbn
-    if event.new:
-        cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
-        clearhistory_button.on_click(cbn.clr_history)
-        chat_box = pn.bind(cbn.conversation, question)
-        chat[1] = pn.panel(chat_box, loading_indicator=True, height=300)
-        database[0] = pn.Column(
-            pn.panel(cbn.get_lquest),
-            pn.layout.Divider(),
-            pn.panel(cbn.get_sources),
-        )
-        chat_history[0] = pn.Column(
-            pn.panel(cbn.get_chats),
-            pn.layout.Divider(),
-            clearhistory_button,
-        )
-        menu_button.name = menu_button.name
-    else:
-        cbn = None
-        chat[1] = pn.pane.HTML(f"{cbn}")
-        chat[0][0].value = ""
-        database[0] = pn.Row(pn.pane.Str("no DB accesses so far"))
-        chat_history[0] = pn.Row(pn.pane.Str("No History Yet"))
-
-save_button.param.watch(start, 'disabled')
-
-
+# Define app template
 app = pn.template.FastGridTemplate(
     title="CBN Chat",
     favicon="assets/gizmo.png",
     sidebar=[
         pn.Column(
-            # menu,
             pn.pane.HTML("<h2>Settings</h2>", styles={"margin": "0 auto"}),
             select_temperature,
             pn.pane.HTML("Chain type:", styles={"font-size": "16px", "margin-bottom": "0"}),
@@ -247,11 +220,11 @@ app = pn.template.FastGridTemplate(
             pn.pane.HTML("Search type:", styles={"font-size": "16px", "margin-bottom": "0"}),
             select_search_type,
             select_top_k,
-            pn.Row(edit_button, save_button, styles={"margin": "0 auto"}),
+            save_button,
             margin=10
         )
     ],
     main_max_width="900px",
 )
-app.main[:3, :6] = pn.Column(menu_button, ui)
+app.main[:3, :6] = pn.Column(menu, ui)
 app.servable()
