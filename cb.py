@@ -108,18 +108,18 @@ class Chatbot(param.Parameterized):
     chat_history = param.List([])
     answer = param.String("")
     panels = param.List([])
-    db_query = param.String("")
+    db_query  = param.String("")
     db_response = param.List([])
     
     def __init__(self, t, c, s, k, **params):
         super(Chatbot, self).__init__(**params)
+        self.source_directory = "docs"
         self.temperature = t
         self.chain_type = c
         self.search_type = s
         self.top_k = k
-        self.source_directory = "docs"
         self.qa = load_db(self.source_directory, self.search_type, self.chain_type, self.top_k, self.temperature)
-
+ 
     def convchain(self, query):
         if query:
             result = self.qa({"question": query, "chat_history": self.chat_history})
@@ -180,82 +180,63 @@ class Chatbot(param.Parameterized):
         self.panels = []
         return 
 
-
-
-def save(event):
-    for button in [save_button, edit_button]:
-        button.disabled = not button.disabled
-
-save_button.on_click(save)
-edit_button.on_click(save)
-
-def start(event):
-    global cbn
-    if event.new:
-        question.disabled = False
-        cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
-        clearhistory_button.on_click(cbn.clr_history)
-        conversation = pn.bind(cbn.convchain, question) 
-        main[0] = pn.Column(
-            pn.Row(question, send_button),
-            pn.panel(conversation, loading_indicator=True, height=300)
-        )
-        main[1] = pn.Column(
-            pn.panel(cbn.get_lquest),
-            pn.layout.Divider(),
-            pn.panel(cbn.get_sources),
-        )
-        main[2] = pn.Column(
-            pn.panel(cbn.get_chats),
-            pn.layout.Divider(),
-            clearhistory_button,
-        )
-    else:
-        question.disabled = True
-        cbn = None
-        main = [
-            pn.Column(
-                pn.Row(question, send_button),
-                pn.pane.HTML("To start conversation save your settings")
-            ),
-            pn.Column(
-                pn.pane.HTML("To start conversation save your settings")
-            ),
-            pn.Column(
-                pn.pane.HTML("To start conversation save your settings")
-            ),
-        ]
-
-main = [
-    pn.Column(
-        pn.Row(question, send_button),
-        pn.pane.HTML("To start conversation save your settings")
-    ),
-    pn.Column(
-        pn.pane.HTML("To start conversation save your settings")
-    ),
-    pn.Column(
-        pn.pane.HTML("To start conversation save your settings")
-    ),
+cbn = None
+main_window = [
+    pn.pane.HTML(object="Class name: **haha**"),
+    pn.pane.HTML(object="Class name: **gagag**"),
+    pn.pane.HTML(object="Class name: **zvzvz**"),
 ]
 
-save_button.param.watch(start, 'disabled')
 
-
-layout = pn.Column(
+ui = pn.Column(
     title,
-    main[0],
+    main_window[0],
 )
 
-def switch_layout(event):
-    layout[0].object = f"<h2>{event.new}</h2>"
-    layout[1] = main[2] if event.new == "Chat history" else (main[1] if event.new == "Database" else main[0])
+def switch_ui(event):
+    ui[0].object = f"<h2>{event.new}</h2>"
+    ui[1] = main_window[2] if event.new == "Chat history" else (main_window[1] if event.new == "Database" else main_window[0])
 
-menu.param.watch(switch_layout, 'value')
+menu.param.watch(switch_ui, 'value')
+
+
+def create_object(event):
+    global cbn
+    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
+    clearhistory_button.on_click(cbn.clr_history)
+    conversation = pn.bind(cbn.convchain, question) 
+    main_window[0] = pn.Column(
+        pn.Row(question, send_button),
+        pn.panel(conversation, loading_indicator=True, height=300)
+    )
+    main_window[1] = pn.Column(
+        pn.panel(cbn.get_lquest),
+        pn.layout.Divider(),
+        pn.panel(cbn.get_sources),
+    )
+    main_window[2] = pn.Column(
+        pn.panel(cbn.get_chats),
+        pn.layout.Divider(),
+        clearhistory_button,
+    )
+    save_button.disabled = True
+    edit_button.disabled = False
+    ui.update()
+
+def delete_object(event):
+    global cbn
+    cbn = None
+    main_window[0] = pn.pane.HTML(object="Class name: **haha**")
+    main_window[1] = pn.pane.HTML(object="Class name: **gagag**")
+    main_window[2] = pn.pane.HTML(object="Class name: **zvzvz**")
+    save_button.disabled = False
+    edit_button.disabled = True
 
 
 
-template = pn.template.FastGridTemplate(
+
+
+app = pn.template.FastGridTemplate(
     title="CBN Chat",
     favicon="assets/gizmo.png",
     sidebar=[
@@ -274,8 +255,9 @@ template = pn.template.FastGridTemplate(
     main_max_width="900px",
 )
 
-template.main[:3, :6] = layout
+app.main[:3, :6] = ui
+save_button.on_click(create_object)
+edit_button.on_click(delete_object)
+app.servable()
 
-template.servable()
-
-# panel serve cbn.py --show --autoreload
+# panel serve cb.py --show --autoreload
