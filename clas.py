@@ -187,6 +187,24 @@ class Chatbot(param.Parameterized):
 
 cbn = None
 
+chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
+database = pn.Row(pn.pane.Str("no DB accesses so far"))
+chat_history = pn.Row(pn.pane.Str("No History Yet"))
+
+menu_items = [('Conversation', 'Conversation'), ('Database', 'Database'), ('Chat history', 'Chat history')]
+menu_button = pn.widgets.MenuButton(name='Conversation', split=True, items=menu_items, button_type='primary', width=150)
+
+ui = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
+
+def switch_ui(event):
+    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else chat_history)
+    ui[1] = None
+    
+def switch_menu_name(event):
+    menu_button.name = event.new
+
+menu_button.on_click(switch_menu_name)
+menu_button.param.watch(switch_ui, "name", onlychanged=False)
 
 def start(event):
     global cbn
@@ -205,30 +223,15 @@ def start(event):
             pn.layout.Divider(),
             clearhistory_button,
         )
+        menu_button.name = menu_button.name
     else:
         cbn = None
         chat[1] = pn.pane.HTML(f"{cbn}")
+        chat[0][0].value = ""
         database[0] = pn.Row(pn.pane.Str("no DB accesses so far"))
         chat_history[0] = pn.Row(pn.pane.Str("No History Yet"))
 
 save_button.param.watch(start, 'disabled')
-
-chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
-database = pn.Row(pn.pane.Str("no DB accesses so far"))
-chat_history = pn.Row(pn.pane.Str("No History Yet"))
-
-menu_items = [('Conversation', 'Conversation'), ('Database', 'Database'), ('Chat history', 'Chat history')]
-menu_button = pn.widgets.MenuButton(name='Conversation', split=True, items=menu_items, button_type='primary', width=150)
-
-ui = pn.Column(pn.Row(question, send_button), pn.pane.HTML(object="To start conversation set up your settings"))
-
-def switch_ui(event):
-    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else chat_history)
-    ui[1] = None
-    menu_button.name = event.new
-    
-menu_button.on_click(switch_ui)
-
 
 
 app = pn.template.FastGridTemplate(
