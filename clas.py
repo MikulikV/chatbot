@@ -6,6 +6,7 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyMuPDFLoader
 from langchain.document_loaders import DirectoryLoader
+from langchain.docstore.document import Document
 
 import panel as pn
 import param
@@ -152,19 +153,19 @@ class Chatbot(param.Parameterized):
                 pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
-        return pn.Column(
-            pn.Row(pn.pane.Markdown(f"DB query:")),
-            pn.pane.Str(self.db_query),
+        return pn.Row(
+            pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"}),
+            pn.pane.HTML(f"{self.db_query}", styles={"font_size": "16px"}),
         )
 
     @param.depends('db_response')
     def get_sources(self):
         if not self.db_response:
             return 
-        rlist=[pn.Row(pn.pane.Markdown(f"Result of DB lookup:"))]
+        rlist=[pn.Row(pn.pane.HTML("<b>Relevant chunks from DB:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))]
         for doc in self.db_response:
-            rlist.append(pn.Row(pn.pane.Str(doc)))
-        return pn.WidgetBox(*rlist, scroll=True)
+            rlist.append(pn.pane.HTML(f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", margin=(10, 10)))
+        return pn.Column(pn.layout.Divider(), *rlist)
     
     def get_history(self):
         if not self.chat_history:
@@ -173,10 +174,11 @@ class Chatbot(param.Parameterized):
                 pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
-        rlist=[pn.Row(pn.pane.Markdown(f"Current Chat History variable"))]
-        for exchange in self.chat_history:
-            rlist.append(pn.Row(pn.pane.Str(exchange)))
-        return pn.WidgetBox(*rlist, width=600, scroll=True)
+        rlist=[]
+        for elem in self.chat_history:
+            rlist.append(pn.pane.HTML(f"{elem}"))
+        rlist.append(pn.pane.HTML("<b>Current chat history variable:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))
+        return pn.Column(*rlist[::-1])
 
 cbn = None
 
