@@ -1,12 +1,13 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.chains import RetrievalQA,  ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyMuPDFLoader
 from langchain.document_loaders import DirectoryLoader
-from langchain.docstore.document import Document
+from langchain.schema import HumanMessage, AIMessage
+import tiktoken
 
 import panel as pn
 import param
@@ -36,7 +37,7 @@ select_chain_type = pn.widgets.RadioButtonGroup(
 )
 select_search_type = pn.widgets.RadioButtonGroup(
     name="Search type", 
-    options=["similarity", "MMR"],
+    options=["similarity", "mmr"],
     button_type="primary",
     button_style="outline",
     styles={"margin-bottom": "20px"}
@@ -60,7 +61,7 @@ save_button = pn.widgets.Button(
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
     name="Menu", 
-    options=['Conversation', 'Database', "Chat history"],
+    options=['Conversation', 'Database', "Splitter", "Chat history"],
     button_type="primary",
     button_style="outline",
     disabled=True,
@@ -77,41 +78,78 @@ question = pn.widgets.TextInput(value="", placeholder="Send a message", width=72
 send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
 chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML())
 # Database window
-database = pn.Row(pn.pane.HTML("No database yet"))
+database = pn.Row(pn.pane.HTML())
+# Splitter window
+splitter = pn.Row(pn.pane.HTML())
 # Chat history window
-chat_history = pn.Row(pn.pane.HTML("No history yet"))
+chat_history = pn.Row(pn.pane.HTML())
 
-# Define a CBN Chat chain
-def load_db(source_directory, search_type, chain_type, k, temperature):
+# CLASS CHATBOT
+
+# Define length_function for text_splitter
+tokenizer = tiktoken.get_encoding("cl100k_base")
+
+def tiktoken_len(text):
+    tokens = tokenizer.encode(
+        text,
+        disallowed_special=()
+    )
+    return len(tokens)
+
+# Define data loader
+def load_data(source_directory, k):
     # load documents
     loader = DirectoryLoader(source_directory, glob="**/*.pdf", loader_cls=PyMuPDFLoader)
     documents = loader.load()
     # split documents
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=2000/k, 
+        chunk_overlap=200/k,
+        length_function=tiktoken_len,
+        separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""],
+        add_start_index = True,
+    )
     docs = text_splitter.split_documents(documents)
+
+    return docs
+
+
+# Define vector store
+def create_vector_store(docs):
     # define embedding
-    embeddings = OpenAIEmbeddings()
+    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
     # create vector database from data
-    db = DocArrayInMemorySearch.from_documents(docs, embeddings)
-    # define retriever
-    retriever = db.as_retriever(search_type=search_type, search_kwargs={"k": k})
+    vector_store = DocArrayInMemorySearch.from_documents(docs, embeddings)
+    
+    return vector_store
+
+
+# Define retriever
+def create_retriever(vector_store, search_type, k):
+    retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": k})
+
+    return retriever
+
+
+# Define chain
+def create_chain(retriever, temperature, chain_type):    
     # create a chatbot chain. Memory is managed externally.
-    qa = ConversationalRetrievalChain.from_llm(
+    chain = ConversationalRetrievalChain.from_llm(
         llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=temperature), 
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
         return_generated_question=True,
     )
-    return qa
+    return chain
 
 # Define CBN class
 class Chatbot(param.Parameterized):
-    chat_history = param.List([])
     answer = param.String("")
     panels = param.List([])
     db_query = param.String("")
     db_response = param.List([])
+    chat_history = param.List([])
     
     def __init__(self, t, c, s, k, **params):
         super(Chatbot, self).__init__(**params)
@@ -120,12 +158,15 @@ class Chatbot(param.Parameterized):
         self.search_type = s
         self.top_k = k
         self.source_directory = "docs"
-        self.qa = load_db(self.source_directory, self.search_type, self.chain_type, self.top_k, self.temperature)
+        self.data = load_data(self.source_directory, self.top_k)
+        self.vector_store = create_vector_store(self.data)
+        self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
+        self.qa = create_chain(self.retriever, self.temperature, self.chain_type)
 
     def conversation(self, query):
         if query:
             result = self.qa({"question": query, "chat_history": self.chat_history})
-            self.chat_history.extend([(query, result["answer"])])
+            self.chat_history.extend([(HumanMessage(content=query).content, AIMessage(content=result['answer']).content)])
             self.db_query = result["generated_question"]
             self.db_response = result["source_documents"]
             self.answer = result['answer'] 
@@ -164,9 +205,31 @@ class Chatbot(param.Parameterized):
             return 
         rlist=[pn.Row(pn.pane.HTML("<b>Relevant chunks from DB:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))]
         for doc in self.db_response:
-            rlist.append(pn.pane.HTML(f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", margin=(10, 10)))
+            rlist.append(pn.pane.HTML(
+                f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", 
+                styles={
+                    "margin": "10px 10px", 
+                    "padding": "5px",
+                    "background-color": "#fff", 
+                    "border-radius": "5px", 
+                    "border": "1px gray solid"
+                }
+            ))
         return pn.Column(pn.layout.Divider(), *rlist)
     
+    @param.depends('data')
+    def count_tokens(self):
+        chunks = [tiktoken_len(doc.page_content) for doc in self.data]
+        return pn.Column(
+            pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            pn.pane.HTML(f"<b>List of the chunks:</b> {chunks}"),
+        )
+    
+    @param.depends('conversation')
     def get_history(self):
         if not self.chat_history:
             return pn.Column(
@@ -176,7 +239,15 @@ class Chatbot(param.Parameterized):
             )
         rlist=[]
         for elem in self.chat_history:
-            rlist.append(pn.pane.HTML(f"{elem}"))
+            rlist.append(pn.pane.HTML(
+                f"{elem}", 
+                styles={
+                    "padding": "5px",
+                    "background-color": "#fff", 
+                    "border-radius": "5px", 
+                    "border": "1px gray solid"
+                }
+            ))
         rlist.append(pn.pane.HTML("<b>Current chat history variable:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))
         return pn.Column(*rlist[::-1])
 
@@ -195,6 +266,9 @@ def start(event):
         pn.panel(cbn.get_last_question),
         pn.panel(cbn.get_sources),
     )
+    splitter[0] = pn.Column(
+        pn.panel(cbn.count_tokens)
+    )
     chat_history[0] = pn.Column(
         pn.panel(cbn.get_history),
     )
@@ -204,7 +278,7 @@ save_button.on_click(start)
 
 # Callback to switch between chat, database and history
 def switch_ui(event):
-    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else chat_history)
+    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else chat_history))
 
 # Watcher to look after menu.value
 menu.param.watch(switch_ui, "value", onlychanged=False)
