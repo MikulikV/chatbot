@@ -1,8 +1,12 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-from langchain.chains import RetrievalQA,  ConversationalRetrievalChain
+from langchain.chains import RetrievalQA
+from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain.agents import Tool
+from langchain.agents import initialize_agent
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyMuPDFLoader
 from langchain.document_loaders import DirectoryLoader
@@ -61,7 +65,7 @@ save_button = pn.widgets.Button(
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
     name="Menu", 
-    options=['Conversation', 'Database', "Splitter", "Chat history"],
+    options=["Conversation", "Database", "Steps", "Splitter", "Memory"],
     button_type="primary",
     button_style="outline",
     disabled=True,
@@ -77,14 +81,24 @@ ui = pn.Column(
 question = pn.widgets.TextInput(value="", placeholder="Send a message", width=720, height=40, disabled=True)
 send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
 chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML())
+# Agent's steps
+steps = pn.Row(pn.pane.HTML())
 # Database window
 database = pn.Row(pn.pane.HTML())
 # Splitter window
 splitter = pn.Row(pn.pane.HTML())
 # Chat history window
-chat_history = pn.Row(pn.pane.HTML())
+memory = pn.Row(pn.pane.HTML())
 
 # CLASS CHATBOT
+
+# Define LLM
+def llm(temperature):
+    return ChatOpenAI(
+        model="gpt-3.5-turbo",
+        temperature=temperature,
+)
+
 
 # Define length_function for text_splitter
 tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -131,25 +145,81 @@ def create_retriever(vector_store, search_type, k):
     return retriever
 
 
+# Define propmpts 
+chain_prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template="""Answer the question based only on the following pieces of context. 
+If the question cannot be answered using the information provided answer with "I don't know".
+
+{context}
+
+Question: {question}
+
+Answer:"""
+)
+chain_type_kwargs = {"prompt": chain_prompt}
+
 # Define chain
-def create_chain(retriever, temperature, chain_type):    
+def create_chain(llm, retriever, chain_type):    
     # create a chatbot chain. Memory is managed externally.
-    chain = ConversationalRetrievalChain.from_llm(
-        llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=temperature), 
+    chain = RetrievalQA.from_chain_type(
+        llm=llm, 
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        return_generated_question=True,
+        # chain_type_kwargs=chain_type_kwargs,
     )
     return chain
+
+
+# Define memory
+def conversational_memory(llm):
+    return ConversationSummaryBufferMemory(
+        llm=llm, 
+        memory_key="chat_history", 
+        input_key='input', 
+        output_key="output", 
+        return_messages=True, 
+        max_token_limit=650
+    )
+
+
+# Define tools
+def agent_tools(cbn_chain):
+    tools = [
+        Tool(
+            name="CBN",
+            func=cbn_chain,
+            description="use this tool when you need to answer all the questions about CBN, Bible, characters from the Bible and Superbook and its characters"
+        ),
+    ]
+
+    return tools
+
+
+# Initialize agent
+def agent(llm, tools, memory):
+    agent = initialize_agent(
+        agent='chat-conversational-react-description',
+        tools=tools,
+        llm=llm,
+        max_iterations=3,
+        memory=memory,
+        return_intermediate_steps=True,
+        handle_parsing_errors="Check your output and make sure it conforms!",
+    )
+
+    return agent
+
 
 # Define CBN class
 class Chatbot(param.Parameterized):
     answer = param.String("")
     panels = param.List([])
-    db_query = param.String("")
+    db_query = param.List([])
     db_response = param.List([])
     chat_history = param.List([])
+    steps = param.List([])
     
     def __init__(self, t, c, s, k, **params):
         super(Chatbot, self).__init__(**params)
@@ -158,18 +228,29 @@ class Chatbot(param.Parameterized):
         self.search_type = s
         self.top_k = k
         self.source_directory = "docs"
+        self.llm = llm(self.temperature)
         self.data = load_data(self.source_directory, self.top_k)
         self.vector_store = create_vector_store(self.data)
         self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
-        self.qa = create_chain(self.retriever, self.temperature, self.chain_type)
+        self.qa = create_chain(self.llm, self.retriever, self.chain_type)
+        self.memory = conversational_memory(self.llm)
+        self.tools = agent_tools(self.qa)
+        self.agent = agent(self.llm, self.tools, self.memory)
 
     def conversation(self, query):
         if query:
-            result = self.qa({"question": query, "chat_history": self.chat_history})
-            self.chat_history.extend([(HumanMessage(content=query).content, AIMessage(content=result['answer']).content)])
-            self.db_query = result["generated_question"]
-            self.db_response = result["source_documents"]
-            self.answer = result['answer'] 
+            response = self.agent({"input": query})
+            self.chat_history = response["chat_history"]
+            self.steps = response["intermediate_steps"]
+            if self.steps:
+                qlist = []
+                rlist = []
+                for step in self.steps:
+                    qlist.append(step[1]["query"])
+                    rlist.append(step[1]["source_documents"])
+                self.db_query = qlist
+                self.db_response = rlist
+            self.answer = response['output'] 
             self.panels.extend([
                 {"You": query},
                 {"Gizmo": self.answer},
@@ -186,6 +267,29 @@ class Chatbot(param.Parameterized):
             allow_input=False,
         )
     
+    @param.depends('steps')
+    def get_steps(self):
+        if not self.steps:
+            return pn.Column(
+                pn.pane.HTML("<h2>There is no Agent steps</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
+            )
+        rlist = []
+        for step in self.steps:
+            rlist.append(
+                pn.pane.HTML(f"{step[0].log[1:-2].replace(',', ',<br>')}", 
+                styles={
+                    "font-size": "16px",
+                    "color": "green",
+                    "padding": "5px",
+                    "background-color": "#fff", 
+                    "border-radius": "5px", 
+                    "border": "1px gray solid"
+                }))
+        return pn.Column(*rlist)
+
+    
     @param.depends('db_query')
     def get_last_question(self):
         if not self.db_query:
@@ -194,27 +298,28 @@ class Chatbot(param.Parameterized):
                 pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
-        return pn.Row(
-            pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"}),
-            pn.pane.HTML(f"{self.db_query}", styles={"font_size": "16px"}),
-        )
+        rlist = [pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"})]
+        for i in range(len(self.db_query)):
+            rlist.append(pn.pane.HTML(f"{self.db_query[i]}\n", styles={"font_size": "16px"}))
+        return pn.Row(*rlist)
 
     @param.depends('db_response')
     def get_sources(self):
         if not self.db_response:
             return 
-        rlist=[pn.Row(pn.pane.HTML("<b>Relevant chunks from DB:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))]
-        for doc in self.db_response:
-            rlist.append(pn.pane.HTML(
-                f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", 
-                styles={
-                    "margin": "10px 10px", 
-                    "padding": "5px",
-                    "background-color": "#fff", 
-                    "border-radius": "5px", 
-                    "border": "1px gray solid"
-                }
-            ))
+        for i in range(len(self.db_response)):
+            rlist=[pn.Row(pn.pane.HTML(f"<b>Relevant chunks from DB for query:</b> {self.db_query[i]}", styles={"font_size": "16px", "margin": "5px 10px"}))]
+            for doc in self.db_response[i]:
+                rlist.append(pn.pane.HTML(
+                    f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", 
+                    styles={
+                        "margin": "10px 10px", 
+                        "padding": "5px",
+                        "background-color": "#fff", 
+                        "border-radius": "5px", 
+                        "border": "1px gray solid"
+                    }
+                ))
         return pn.Column(pn.layout.Divider(), *rlist)
     
     @param.depends('data')
@@ -229,7 +334,7 @@ class Chatbot(param.Parameterized):
             pn.pane.HTML(f"<b>List of the chunks:</b> {chunks}"),
         )
     
-    @param.depends('conversation')
+    @param.depends('chat_history')
     def get_history(self):
         if not self.chat_history:
             return pn.Column(
@@ -238,9 +343,9 @@ class Chatbot(param.Parameterized):
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist=[]
-        for elem in self.chat_history:
+        for i in range(0, len(self.chat_history), 2):
             rlist.append(pn.pane.HTML(
-                f"{elem}", 
+                f"({self.chat_history[i].content}) - ({self.chat_history[i+1].content})", 
                 styles={
                     "padding": "5px",
                     "background-color": "#fff", 
@@ -269,7 +374,10 @@ def start(event):
     splitter[0] = pn.Column(
         pn.panel(cbn.count_tokens)
     )
-    chat_history[0] = pn.Column(
+    steps[0] = pn.Column(
+        pn.panel(cbn.get_steps)
+    )
+    memory[0] = pn.Column(
         pn.panel(cbn.get_history),
     )
     menu.value = menu.value
@@ -278,7 +386,7 @@ save_button.on_click(start)
 
 # Callback to switch between chat, database and history
 def switch_ui(event):
-    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else chat_history))
+    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else (steps if event.new == 'Steps' else memory)))
 
 # Watcher to look after menu.value
 menu.param.watch(switch_ui, "value", onlychanged=False)
