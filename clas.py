@@ -163,6 +163,25 @@ Answer:"""
 )
 chain_type_kwargs = {"prompt": chain_prompt}
 
+system_message = """
+You are Personal Assistant named Gizmo as a character from the SuperBook.
+
+Gizmo is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. As a language model, Gizmo is able to generate human-like text based on the input it receives, allowing it to engage in natural-sounding conversations and provide responses that are coherent and relevant to the topic at hand.
+
+Gizmo is constantly learning and improving, and its capabilities are constantly evolving. It is able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. Additionally, Gizmo is able to generate its own text based on the input it receives, allowing it to engage in discussions and provide explanations and descriptions on a wide range of topics.     
+
+Gizmo answers questions as a deep believer in God and in no other way, for example Gizmo doesn't answer like pirate.
+
+Overall, Gizmo is a powerful system that can help with a wide range of tasks and provide valuable insights and information on a wide range of topics. Whether you need help with a specific question or just want to have a conversation about a particular topic, Gizmo is here to assist.
+"""
+
+def agent_prompt(cbn_agent, tools):
+    return cbn_agent.agent.create_prompt(
+        system_message=system_message,
+        tools=tools
+    )
+
+
 # Define chain
 def create_chain(llm, retriever, chain_type):    
     # create a chatbot chain. Memory is managed externally.
@@ -240,6 +259,7 @@ class Chatbot(param.Parameterized):
         self.memory = conversational_memory(self.llm)
         self.tools = agent_tools(self.qa)
         self.agent = agent(self.llm, self.tools, self.memory)
+        self.agent.agent.llm_chain.prompt = agent_prompt(self.agent, self.tools)
 
     def conversation(self, query):
         if query:
@@ -362,9 +382,10 @@ class Chatbot(param.Parameterized):
             )
         rlist=[]
         for message in self.chat_history:
-            rlist.append(
+            rlist.append(pn.Row(
+                pn.pane.HTML(f"{message.type.upper()}:", styles={"padding": "5px"}),
                 pn.pane.HTML(
-                    f"{message.type.upper()}: {message.content}", 
+                    f"{message.content}", 
                     styles={
                         "padding": "5px",
                         "background-color": "#fff", 
@@ -372,7 +393,7 @@ class Chatbot(param.Parameterized):
                         "border": "1px gray solid"
                     }
                 ),
-            )
+            ))
         rlist.append(pn.pane.HTML("<b>Current chat history variable:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))
         return pn.Column(*rlist[::-1])
 
