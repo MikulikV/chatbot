@@ -14,6 +14,10 @@ from langchain.schema import HumanMessage, AIMessage
 import tiktoken
 
 import panel as pn
+import pandas as pd
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
 import param
 
 from dotenv import load_dotenv 
@@ -80,7 +84,7 @@ ui = pn.Column(
 # Conversation window
 question = pn.widgets.TextInput(value="", placeholder="Send a message", width=720, height=40, disabled=True)
 send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
-chat = pn.Column(pn.Row(question, send_button), pn.pane.HTML())
+chat = pn.Column(pn.pane.HTML(), pn.Row(question, send_button))
 # Agent's steps
 steps = pn.Row(pn.pane.HTML())
 # Database window
@@ -97,7 +101,7 @@ def llm(temperature):
     return ChatOpenAI(
         model="gpt-3.5-turbo",
         temperature=temperature,
-)
+    )
 
 
 # Define length_function for text_splitter
@@ -167,7 +171,7 @@ def create_chain(llm, retriever, chain_type):
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        # chain_type_kwargs=chain_type_kwargs,
+        chain_type_kwargs=chain_type_kwargs,
     )
     return chain
 
@@ -242,12 +246,15 @@ class Chatbot(param.Parameterized):
             response = self.agent({"input": query})
             self.chat_history = response["chat_history"]
             self.steps = response["intermediate_steps"]
+            self.db_query = []
+            self.db_response = []
             if self.steps:
                 qlist = []
                 rlist = []
                 for step in self.steps:
-                    qlist.append(step[1]["query"])
-                    rlist.append(step[1]["source_documents"])
+                    if not isinstance(step[1], str):
+                        qlist.append(step[1]["query"])
+                        rlist.append(step[1]["source_documents"])
                 self.db_query = qlist
                 self.db_response = rlist
             self.answer = response['output'] 
@@ -265,6 +272,8 @@ class Chatbot(param.Parameterized):
             },
             show_names=False,
             allow_input=False,
+            ascending=True,
+            height = 280
         )
     
     @param.depends('steps')
@@ -272,7 +281,7 @@ class Chatbot(param.Parameterized):
         if not self.steps:
             return pn.Column(
                 pn.pane.HTML("<h2>There is no Agent steps</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>That means llm answered your question without using your database or you didn't start conversation yet</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist = []
@@ -295,7 +304,7 @@ class Chatbot(param.Parameterized):
         if not self.db_query:
             return pn.Column(
                 pn.pane.HTML("<h2>There is no information retrieved from your database</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>That means llm answered your question without using your database or you didn't start conversation yet</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist = [pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"})]
@@ -325,13 +334,22 @@ class Chatbot(param.Parameterized):
     @param.depends('data')
     def count_tokens(self):
         chunks = [tiktoken_len(doc.page_content) for doc in self.data]
-        return pn.Column(
-            pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
-            pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-            pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-            pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-            pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-            pn.pane.HTML(f"<b>List of the chunks:</b> {chunks}"),
+        df = pd.DataFrame({'Token Count': chunks})
+        # Create a histogram of the token count distribution
+        fig = plt.figure(figsize=(3.5, 2.5))
+        ax = fig.add_subplot()
+        df.hist(column='Token Count', bins=40, ax=ax)
+        plt.close(fig)  # Close the figure to prevent it from being displayed immediately
+        histogram_widget = pn.pane.Matplotlib(fig)
+        return pn.Row(
+            pn.Column(
+                pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+            ),
+            histogram_widget,
         )
     
     @param.depends('chat_history')
@@ -343,16 +361,18 @@ class Chatbot(param.Parameterized):
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist=[]
-        for i in range(0, len(self.chat_history), 2):
-            rlist.append(pn.pane.HTML(
-                f"({self.chat_history[i].content}) - ({self.chat_history[i+1].content})", 
-                styles={
-                    "padding": "5px",
-                    "background-color": "#fff", 
-                    "border-radius": "5px", 
-                    "border": "1px gray solid"
-                }
-            ))
+        for message in self.chat_history:
+            rlist.append(
+                pn.pane.HTML(
+                    f"{message.type.upper()}: {message.content}", 
+                    styles={
+                        "padding": "5px",
+                        "background-color": "#fff", 
+                        "border-radius": "5px", 
+                        "border": "1px gray solid"
+                    }
+                ),
+            )
         rlist.append(pn.pane.HTML("<b>Current chat history variable:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))
         return pn.Column(*rlist[::-1])
 
@@ -366,7 +386,7 @@ def start(event):
     global cbn
     cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
     chat_box = pn.bind(cbn.conversation, question)
-    chat[1] = pn.panel(chat_box, loading_indicator=True, height=300)
+    chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
     database[0] = pn.Column(
         pn.panel(cbn.get_last_question),
         pn.panel(cbn.get_sources),
@@ -412,3 +432,4 @@ app = pn.template.FastGridTemplate(
 )
 app.main[:3, :6] = pn.Column(menu, ui)
 app.servable()
+# panel serve clas.py --show --autoreload
