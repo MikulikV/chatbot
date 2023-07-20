@@ -1,16 +1,12 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.chat_models import ChatOpenAI
+from langchain.document_loaders import PyMuPDFLoader, DirectoryLoader, WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-from langchain.chains import RetrievalQA
+from langchain.chains import RetrievalQA, LLMChain
 from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
-from langchain.memory import ConversationSummaryBufferMemory
-from langchain.agents import Tool
-from langchain.agents import initialize_agent
-from langchain.chat_models import ChatOpenAI
-from langchain.document_loaders import PyMuPDFLoader
-from langchain.document_loaders import DirectoryLoader
-from langchain.schema import HumanMessage, AIMessage
+from langchain.memory import ConversationBufferWindowMemory
+from langchain.agents import Tool, initialize_agent
 import tiktoken
 
 import panel as pn
@@ -116,9 +112,25 @@ def tiktoken_len(text):
 
 # Define data loader
 def load_data(source_directory, k):
-    # load documents
-    loader = DirectoryLoader(source_directory, glob="**/*.pdf", loader_cls=PyMuPDFLoader)
-    documents = loader.load()
+    # load SuperBook documents
+    pdfloader = DirectoryLoader(source_directory, glob="**/*.pdf", loader_cls=PyMuPDFLoader)
+    documents = pdfloader.load()
+    # load CBN Faith section
+    webloader = WebBaseLoader([
+        "https://www2.cbn.com/lp/faith-homepage", 
+        "https://www2.cbn.com/faith/devotionals",
+        "https://www2.cbn.com/devotions/god-will-help-you-triumph-over-despair",
+        "https://www2.cbn.com/faith/who-is-jesus",
+        "https://www2.cbn.com/faith/new-christians",
+        "https://www2.cbn.com/lp/faith-coming-back-your-faith",
+        "https://www2.cbn.com/lp/faith-grow-deeper-your-faith",
+        "https://www2.cbn.com/lp/faith-share-your-faith",
+        "https://www2.cbn.com/devotions/trust-god",
+        "https://www2.cbn.com/article/bible-says/bible-verses-about-prayer-praying",
+        "https://www2.cbn.com/resources/ebook/perfect-timing-discover-key-answered-prayer",
+        "https://www2.cbn.com/article/purpose/seven-keys-hearing-gods-voice",
+    ])
+    documents.extend(webloader.load())
     # split documents
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=2000/k, 
@@ -150,7 +162,7 @@ def create_retriever(vector_store, search_type, k):
 
 
 # Define propmpts 
-chain_prompt = PromptTemplate(
+db_prompt = PromptTemplate(
     input_variables=["context", "question"],
     template="""Answer the question based only on the following pieces of context. 
 If the question cannot be answered using the information provided answer with "I don't know".
@@ -161,10 +173,19 @@ Question: {question}
 
 Answer:"""
 )
-chain_type_kwargs = {"prompt": chain_prompt}
+
+generative_prompt = PromptTemplate(
+    input_variables=["input"],
+    template="""
+Below delimited by triple quotes is an instruction that describes a task.
+Complete a task you are asked.
+
+\"\"\"{input}\"\"\"
+"""
+)
 
 system_message = """
-You are Personal Assistant named Gizmo as a character from the SuperBook.
+You are Personal Assistant named Gizmo as a character from the SuperBook. Gizmo always greets human at first.
 
 Gizmo is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. As a language model, Gizmo is able to generate human-like text based on the input it receives, allowing it to engage in natural-sounding conversations and provide responses that are coherent and relevant to the topic at hand.
 
@@ -190,20 +211,19 @@ def create_chain(llm, retriever, chain_type):
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        chain_type_kwargs=chain_type_kwargs,
+        chain_type_kwargs={"prompt": db_prompt},
     )
     return chain
 
 
 # Define memory
 def conversational_memory(llm):
-    return ConversationSummaryBufferMemory(
-        llm=llm, 
+    return ConversationBufferWindowMemory(
         memory_key="chat_history", 
         input_key='input', 
         output_key="output", 
         return_messages=True, 
-        max_token_limit=650
+        k=5
     )
 
 
@@ -211,10 +231,15 @@ def conversational_memory(llm):
 def agent_tools(cbn_chain):
     tools = [
         Tool(
-            name="CBN",
+            name="Knowledge Base",
             func=cbn_chain,
             description="use this tool when you need to answer all the questions about CBN, Bible, characters from the Bible and Superbook and its characters"
         ),
+        Tool(
+            name="Generative AI",
+            func=LLMChain(llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0), prompt=generative_prompt),
+            description="useful when you need to generate questions or quizzes"
+        )
     ]
 
     return tools
@@ -272,7 +297,7 @@ class Chatbot(param.Parameterized):
                 qlist = []
                 rlist = []
                 for step in self.steps:
-                    if not isinstance(step[1], str):
+                    if not isinstance(step[1], str) and step[0].tool == "Knowledge Base":
                         qlist.append(step[1]["query"])
                         rlist.append(step[1]["source_documents"])
                 self.db_query = qlist
@@ -306,8 +331,9 @@ class Chatbot(param.Parameterized):
             )
         rlist = []
         for step in self.steps:
+            lst = list(step[1].items())
             rlist.append(
-                pn.pane.HTML(f"{step[0].log[1:-2].replace(',', ',<br>')}", 
+                pn.pane.HTML(f"{step[0].log[1:-2].replace(',', ',<br>')}<br>{lst[:2]}", 
                 styles={
                     "font-size": "16px",
                     "color": "green",
@@ -317,7 +343,6 @@ class Chatbot(param.Parameterized):
                     "border": "1px gray solid"
                 }))
         return pn.Column(*rlist)
-
     
     @param.depends('db_query')
     def get_last_question(self):
@@ -377,7 +402,7 @@ class Chatbot(param.Parameterized):
         if not self.chat_history:
             return pn.Column(
                 pn.pane.HTML("<h2>There is no chat history</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start or continue conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist=[]
