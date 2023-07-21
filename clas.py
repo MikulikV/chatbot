@@ -65,7 +65,7 @@ save_button = pn.widgets.Button(
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
     name="Menu", 
-    options=["Conversation", "Database", "Steps", "Splitter", "Memory"],
+    options=["Conversation", "Database", "Splitter", "Memory"],
     button_type="primary",
     button_style="outline",
     disabled=True,
@@ -81,14 +81,12 @@ ui = pn.Column(
 question = pn.widgets.TextInput(value="", placeholder="Send a message", width=720, height=40, disabled=True)
 send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
 chat = pn.Column(pn.pane.HTML(), pn.Row(question, send_button))
-# Agent's steps
-steps = pn.Row(pn.pane.HTML())
 # Database window
 database = pn.Row(pn.pane.HTML())
 # Splitter window
 splitter = pn.Row(pn.pane.HTML())
 # Chat history window
-memory = pn.Row(pn.pane.HTML())
+chat_history = pn.Row(pn.pane.HTML())
 
 # CLASS CHATBOT
 
@@ -129,6 +127,8 @@ def load_data(source_directory, k):
         "https://www2.cbn.com/article/bible-says/bible-verses-about-prayer-praying",
         "https://www2.cbn.com/resources/ebook/perfect-timing-discover-key-answered-prayer",
         "https://www2.cbn.com/article/purpose/seven-keys-hearing-gods-voice",
+        "https://cbn.com/superbook/faq-episodes.aspx", # FAQ SuperBook
+        "https://us-en.superbook.cbn.com/faq"
     ])
     documents.extend(webloader.load())
     # split documents
@@ -161,46 +161,36 @@ def create_retriever(vector_store, search_type, k):
     return retriever
 
 
-# Define propmpts 
-db_prompt = PromptTemplate(
-    input_variables=["context", "question"],
-    template="""Answer the question based only on the following pieces of context. 
-If the question cannot be answered using the information provided answer with "I don't know".
-
-{context}
-
-Question: {question}
-
-Answer:"""
-)
-
-generative_prompt = PromptTemplate(
-    input_variables=["input"],
+# Define propmpt
+prompt = PromptTemplate(
+    input_variables=["history", "context", "question"],
     template="""
-Below delimited by triple quotes is an instruction that describes a task.
-Complete a task you are asked.
-
-\"\"\"{input}\"\"\"
-"""
+You are personal assistant named Gizmo like a character from SuperBook who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
+You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions.
+Answer as a deep believer, but not any other way. Do not answer like a pirate or someone else.
+Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question:
+------
+<ctx>
+{context}
+</ctx>
+------
+<hs>
+{history}
+</hs>
+------
+{question}
+If it's not enough to answer the question use your own memory.
+Answer:
+""",
 )
 
-system_message = """
-You are Personal Assistant named Gizmo as a character from the SuperBook. Gizmo always greets human at first.
-
-Gizmo is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. As a language model, Gizmo is able to generate human-like text based on the input it receives, allowing it to engage in natural-sounding conversations and provide responses that are coherent and relevant to the topic at hand.
-
-Gizmo is constantly learning and improving, and its capabilities are constantly evolving. It is able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. Additionally, Gizmo is able to generate its own text based on the input it receives, allowing it to engage in discussions and provide explanations and descriptions on a wide range of topics.     
-
-Gizmo answers questions as a deep believer in God and in no other way, for example Gizmo doesn't answer like pirate.
-
-Overall, Gizmo is a powerful system that can help with a wide range of tasks and provide valuable insights and information on a wide range of topics. Whether you need help with a specific question or just want to have a conversation about a particular topic, Gizmo is here to assist.
-"""
-
-def agent_prompt(cbn_agent, tools):
-    return cbn_agent.agent.create_prompt(
-        system_message=system_message,
-        tools=tools
-    )
+# Define memory
+memory = ConversationBufferWindowMemory( 
+    memory_key="history", 
+    input_key='question',  
+    return_messages=True,
+    k=6
+)
 
 
 # Define chain
@@ -211,63 +201,18 @@ def create_chain(llm, retriever, chain_type):
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        chain_type_kwargs={"prompt": db_prompt},
+        chain_type_kwargs={"memory": memory, "prompt": prompt},
     )
     return chain
-
-
-# Define memory
-def conversational_memory(llm):
-    return ConversationBufferWindowMemory(
-        memory_key="chat_history", 
-        input_key='input', 
-        output_key="output", 
-        return_messages=True, 
-        k=5
-    )
-
-
-# Define tools
-def agent_tools(cbn_chain):
-    tools = [
-        Tool(
-            name="Knowledge Base",
-            func=cbn_chain,
-            description="use this tool when you need to answer all the questions about CBN, Bible, characters from the Bible and Superbook and its characters"
-        ),
-        Tool(
-            name="Generative AI",
-            func=LLMChain(llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0), prompt=generative_prompt),
-            description="useful when you need to generate questions or quizzes"
-        )
-    ]
-
-    return tools
-
-
-# Initialize agent
-def agent(llm, tools, memory):
-    agent = initialize_agent(
-        agent='chat-conversational-react-description',
-        tools=tools,
-        llm=llm,
-        max_iterations=3,
-        memory=memory,
-        return_intermediate_steps=True,
-        handle_parsing_errors="Check your output and make sure it conforms!",
-    )
-
-    return agent
 
 
 # Define CBN class
 class Chatbot(param.Parameterized):
     answer = param.String("")
     panels = param.List([])
-    db_query = param.List([])
+    db_query = param.String("")
     db_response = param.List([])
     chat_history = param.List([])
-    steps = param.List([])
     
     def __init__(self, t, c, s, k, **params):
         super(Chatbot, self).__init__(**params)
@@ -281,28 +226,14 @@ class Chatbot(param.Parameterized):
         self.vector_store = create_vector_store(self.data)
         self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
-        self.memory = conversational_memory(self.llm)
-        self.tools = agent_tools(self.qa)
-        self.agent = agent(self.llm, self.tools, self.memory)
-        self.agent.agent.llm_chain.prompt = agent_prompt(self.agent, self.tools)
 
     def conversation(self, query):
         if query:
-            response = self.agent({"input": query})
-            self.chat_history = response["chat_history"]
-            self.steps = response["intermediate_steps"]
-            self.db_query = []
-            self.db_response = []
-            if self.steps:
-                qlist = []
-                rlist = []
-                for step in self.steps:
-                    if not isinstance(step[1], str) and step[0].tool == "Knowledge Base":
-                        qlist.append(step[1]["query"])
-                        rlist.append(step[1]["source_documents"])
-                self.db_query = qlist
-                self.db_response = rlist
-            self.answer = response['output'] 
+            response = self.qa({"query": query})
+            self.chat_history = self.qa.combine_documents_chain.memory.chat_memory.messages
+            self.db_query = response["query"]
+            self.db_response = response["source_documents"]
+            self.answer = response['result'] 
             self.panels.extend([
                 {"You": query},
                 {"Gizmo": self.answer},
@@ -321,59 +252,35 @@ class Chatbot(param.Parameterized):
             height = 280
         )
     
-    @param.depends('steps')
-    def get_steps(self):
-        if not self.steps:
-            return pn.Column(
-                pn.pane.HTML("<h2>There is no Agent steps</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>That means llm answered your question without using your database or you didn't start conversation yet</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
-            )
-        rlist = []
-        for step in self.steps:
-            lst = list(step[1].items())
-            rlist.append(
-                pn.pane.HTML(f"{step[0].log[1:-2].replace(',', ',<br>')}<br>{lst[:2]}", 
-                styles={
-                    "font-size": "16px",
-                    "color": "green",
-                    "padding": "5px",
-                    "background-color": "#fff", 
-                    "border-radius": "5px", 
-                    "border": "1px gray solid"
-                }))
-        return pn.Column(*rlist)
-    
     @param.depends('db_query')
     def get_last_question(self):
         if not self.db_query:
             return pn.Column(
                 pn.pane.HTML("<h2>There is no information retrieved from your database</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>That means llm answered your question without using your database or you didn't start conversation yet</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
-        rlist = [pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"})]
-        for i in range(len(self.db_query)):
-            rlist.append(pn.pane.HTML(f"{self.db_query[i]}\n", styles={"font_size": "16px"}))
-        return pn.Row(*rlist)
+        return pn.Row(
+            pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"}),
+            pn.pane.HTML(f"{self.db_query}", styles={"font_size": "16px"}),
+        )
 
     @param.depends('db_response')
     def get_sources(self):
         if not self.db_response:
             return 
-        for i in range(len(self.db_response)):
-            rlist=[pn.Row(pn.pane.HTML(f"<b>Relevant chunks from DB for query:</b> {self.db_query[i]}", styles={"font_size": "16px", "margin": "5px 10px"}))]
-            for doc in self.db_response[i]:
-                rlist.append(pn.pane.HTML(
-                    f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", 
-                    styles={
-                        "margin": "10px 10px", 
-                        "padding": "5px",
-                        "background-color": "#fff", 
-                        "border-radius": "5px", 
-                        "border": "1px gray solid"
-                    }
-                ))
+        rlist=[pn.Row(pn.pane.HTML("<b>Relevant chunks from DB for query:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))]
+        for doc in self.db_response:
+            rlist.append(pn.pane.HTML(
+                f"<b>Page content=</b>{doc.page_content}<br><b>Metadata=</b>{doc.metadata}", 
+                styles={
+                    "margin": "10px 10px", 
+                    "padding": "5px",
+                    "background-color": "#fff", 
+                    "border-radius": "5px", 
+                    "border": "1px gray solid"
+                }
+            ))
         return pn.Column(pn.layout.Divider(), *rlist)
     
     @param.depends('data')
@@ -402,7 +309,7 @@ class Chatbot(param.Parameterized):
         if not self.chat_history:
             return pn.Column(
                 pn.pane.HTML("<h2>There is no chat history</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start or continue conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
             )
         rlist=[]
@@ -440,10 +347,7 @@ def start(event):
     splitter[0] = pn.Column(
         pn.panel(cbn.count_tokens)
     )
-    steps[0] = pn.Column(
-        pn.panel(cbn.get_steps)
-    )
-    memory[0] = pn.Column(
+    chat_history[0] = pn.Column(
         pn.panel(cbn.get_history),
     )
     menu.value = menu.value
@@ -452,7 +356,7 @@ save_button.on_click(start)
 
 # Callback to switch between chat, database and history
 def switch_ui(event):
-    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else (steps if event.new == 'Steps' else memory)))
+    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else chat_history))
 
 # Watcher to look after menu.value
 menu.param.watch(switch_ui, "value", onlychanged=False)

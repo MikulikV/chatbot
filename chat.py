@@ -3,10 +3,11 @@ from langchain.document_loaders import WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import DocArrayInMemorySearch
+from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA,  ConversationalRetrievalChain, RetrievalQAWithSourcesChain
 from langchain.docstore.document import Document
 from langchain.schema import HumanMessage, AIMessage
-from langchain.memory import ConversationSummaryBufferMemory
+from langchain.memory import ConversationSummaryBufferMemory, ConversationBufferWindowMemory
 import tiktoken
 import re
 import os
@@ -110,7 +111,35 @@ def create_retriever(vector_store, search_type, k):
 
     return retriever
 
+template = """
+You are personal assistant named Gizmo like a character from SuperBook who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
+You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions.
+Answer as a deep believer, but not any other way. Do not answer like a pirate or someone else.
+Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question:
+------
+<ctx>
+{context}
+</ctx>
+------
+<hs>
+{history}
+</hs>
+------
+{question}
+If it's not enough to answer the question use your own memory.
+Answer:
+"""
+prompt = PromptTemplate(
+    input_variables=["history", "context", "question"],
+    template=template,
+)
 
+memory = ConversationBufferWindowMemory( 
+    memory_key="history", 
+    input_key='question',  
+    return_messages=True,
+    k=6
+)
 # Define chain
 def create_chain(retriever, temperature, chain_type):    
     # create a chatbot chain. Memory is managed externally.
@@ -119,7 +148,7 @@ def create_chain(retriever, temperature, chain_type):
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        memory=ConversationSummaryBufferMemory(llm=ChatOpenAI(model_name="gpt-3.5-turbo"), memory_key="chat_history", input_key='query', output_key="result", return_messages=True, max_token_limit=650)
+        chain_type_kwargs={"memory": memory, "prompt": prompt, "verbose": True}
     )
     return chain
 
@@ -135,7 +164,8 @@ if __name__ == "__main__":
         "https://www2.cbn.com/faith/new-christians",
         "https://www2.cbn.com/lp/faith-coming-back-your-faith",
         "https://www2.cbn.com/lp/faith-grow-deeper-your-faith",
-        "https://www2.cbn.com/lp/faith-share-your-faith"
+        "https://www2.cbn.com/lp/faith-share-your-faith",
+        "https://cbn.com/superbook/faq-episodes.aspx"
     ]
 
     chunks = load_data(source_urls, 4)
@@ -162,6 +192,11 @@ if __name__ == "__main__":
         # for document in source:
         #     print(f"Text chunk: {document.page_content}...\n")
         print(f"Answer: {response}")
+        print()
+        print(f"Result: {response['result']}")
+        print(chain)
+        print(chain.combine_documents_chain.llm_chain.prompt.template)
+        print(chain.combine_documents_chain.memory.chat_memory.messages)
 
 
 
