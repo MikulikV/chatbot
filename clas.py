@@ -3,11 +3,12 @@ from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyMuPDFLoader, DirectoryLoader, WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-from langchain.chains import RetrievalQA, LLMChain
+from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.agents import Tool, initialize_agent
+from langchain.docstore.document import Document
 import tiktoken
+import re
 
 import panel as pn
 import pandas as pd
@@ -90,6 +91,46 @@ chat_history = pn.Row(pn.pane.HTML())
 
 # CLASS CHATBOT
 
+# Cleaning functions
+
+def fix_newlines(text):
+    return re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+
+
+def fix_tabs(text):
+    return re.sub(r"(?<!\t)\t(?!\t)", " ", re.sub(r"\t{2,}", " \t ", text))
+
+
+def remove_multiple_newlines(text):
+    return re.sub(r"\n{2,}", " \n ", text)
+
+
+def remove_multiple_spaces(text):
+    return re.sub(r" +", " ", text)
+
+
+def remove_time_codes(text):
+    return re.sub(r"\d{2}:\d{2}:\d{2}", "", text)
+
+
+def remove_stars_from_text(text):
+    return text.replace("*", "")
+
+
+def clean_text(data, cleaning_functions):
+    prepared_data = []
+    for document in data:
+        for cleaning_function in cleaning_functions:
+            document.page_content = cleaning_function(document.page_content)
+        doc = Document(
+            page_content=document.page_content,
+            metadata=document.metadata
+        )
+        prepared_data.append(doc)
+    
+    return prepared_data
+
+
 # Define LLM
 def llm(temperature):
     return ChatOpenAI(
@@ -98,21 +139,12 @@ def llm(temperature):
     )
 
 
-# Define length_function for text_splitter
-tokenizer = tiktoken.get_encoding("cl100k_base")
-
-def tiktoken_len(text):
-    tokens = tokenizer.encode(
-        text,
-        disallowed_special=()
-    )
-    return len(tokens)
-
 # Define data loader
-def load_data(source_directory, k):
+def load_data():
+    documents = []
     # load SuperBook documents
-    pdfloader = DirectoryLoader(source_directory, glob="**/*.pdf", loader_cls=PyMuPDFLoader)
-    documents = pdfloader.load()
+    pdfloader = DirectoryLoader("docs", glob="**/*.pdf", loader_cls=PyMuPDFLoader)
+    documents.extend(pdfloader.load())
     # load CBN Faith section
     webloader = WebBaseLoader([
         "https://www2.cbn.com/lp/faith-homepage", 
@@ -131,17 +163,43 @@ def load_data(source_directory, k):
         "https://us-en.superbook.cbn.com/faq"
     ])
     documents.extend(webloader.load())
-    # split documents
+    cleaning_functions = [
+        fix_tabs,
+        remove_time_codes,
+        remove_stars_from_text,
+        fix_newlines,
+        remove_multiple_newlines,
+        remove_multiple_spaces,
+    ]
+
+    docs = clean_text(documents, cleaning_functions)
+
+    return docs
+
+
+# Define length_function for text_splitter
+tokenizer = tiktoken.get_encoding("cl100k_base")
+
+def tiktoken_len(text):
+    tokens = tokenizer.encode(
+        text,
+        disallowed_special=()
+    )
+    return len(tokens)
+
+
+# Define documents splitter
+def split_documents(documents, k):
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=2000/k, 
-        chunk_overlap=200/k,
+        chunk_overlap=100/k,
         length_function=tiktoken_len,
         separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""],
         add_start_index = True,
     )
     docs = text_splitter.split_documents(documents)
 
-    return docs
+    return docs 
 
 
 # Define vector store
@@ -179,7 +237,7 @@ Use the following context (delimited by <ctx></ctx>) and the chat history (delim
 </hs>
 ------
 {question}
-If it's not enough to answer the question use your own memory.
+If it's not enough to answer the question use your own memory. Answer in question's language.
 Answer:
 """,
 )
@@ -220,10 +278,10 @@ class Chatbot(param.Parameterized):
         self.chain_type = c
         self.search_type = s
         self.top_k = k
-        self.source_directory = "docs"
         self.llm = llm(self.temperature)
-        self.data = load_data(self.source_directory, self.top_k)
-        self.vector_store = create_vector_store(self.data)
+        self.data = load_data()
+        self.chunks = split_documents(self.data, self.top_k)
+        self.vector_store = create_vector_store(self.chunks)
         self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
 
@@ -283,9 +341,8 @@ class Chatbot(param.Parameterized):
             ))
         return pn.Column(pn.layout.Divider(), *rlist)
     
-    @param.depends('data')
     def count_tokens(self):
-        chunks = [tiktoken_len(doc.page_content) for doc in self.data]
+        chunks = [tiktoken_len(doc.page_content) for doc in self.chunks]
         df = pd.DataFrame({'Token Count': chunks})
         # Create a histogram of the token count distribution
         fig = plt.figure(figsize=(3.5, 2.5))
@@ -293,16 +350,20 @@ class Chatbot(param.Parameterized):
         df.hist(column='Token Count', bins=40, ax=ax)
         plt.close(fig)  # Close the figure to prevent it from being displayed immediately
         histogram_widget = pn.pane.Matplotlib(fig)
-        return pn.Row(
-            pn.Column(
-                pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+        return pn.Column(
+            pn.Row(
+                pn.Column(
+                    pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                    pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                    pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                    pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                    pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                ),
+                histogram_widget,
             ),
-            histogram_widget,
+            pn.pane.HTML(f"Array of chunks: {chunks}")
         )
+    
     
     @param.depends('chat_history')
     def get_history(self):
@@ -329,14 +390,12 @@ class Chatbot(param.Parameterized):
         rlist.append(pn.pane.HTML("<b>Current chat history variable:</b>", styles={"font_size": "16px", "margin": "5px 10px"}))
         return pn.Column(*rlist[::-1])
 
-cbn = None
 
 # Callback to create a CBN object
 def start(event):
     for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
         widget.disabled = not widget.disabled
 
-    global cbn
     cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
     chat_box = pn.bind(cbn.conversation, question)
     chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
