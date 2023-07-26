@@ -1,6 +1,6 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.document_loaders import PyMuPDFLoader, DirectoryLoader, WebBaseLoader
+from langchain.document_loaders import PyMuPDFLoader, DirectoryLoader, WebBaseLoader, Docx2txtLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.chains import RetrievalQA
@@ -9,6 +9,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.docstore.document import Document
 import tiktoken
 import re
+import os
 
 import panel as pn
 import pandas as pd
@@ -42,12 +43,12 @@ select_chain_type = pn.widgets.RadioButtonGroup(
 )
 select_search_type = pn.widgets.RadioButtonGroup(
     name="Search type", 
-    options=["similarity", "mmr"],
+    options=["similarity", "mmr", "score_threshold"],
     button_type="primary",
     button_style="outline",
     styles={"margin-bottom": "20px"}
 )
-select_top_k = pn.widgets.IntSlider(
+select_top_k = pn.widgets.FloatSlider(
     name="Number of relevant chunks",
     start=1, 
     end=10, 
@@ -62,6 +63,22 @@ save_button = pn.widgets.Button(
     height=35, 
     styles={"margin": "0 auto"}
 )
+
+def switch_top_k(event):
+    if event.new == "score_threshold":
+        select_top_k.name = "Min score threshold"
+        select_top_k.start = 0.1
+        select_top_k.end = 0.99
+        select_top_k.step = 0.1
+        select_top_k.value = 0.7
+    else:
+        select_top_k.name="Number of relevant chunks"
+        select_top_k.start=1
+        select_top_k.end=10 
+        select_top_k.step=1 
+        select_top_k.value=4 
+
+select_search_type.param.watch(switch_top_k, "value")
 
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
@@ -131,6 +148,15 @@ def clean_text(data, cleaning_functions):
     return prepared_data
 
 
+cleaning_functions = [
+    fix_tabs,
+    remove_time_codes,
+    remove_stars_from_text,
+    fix_newlines,
+    remove_multiple_newlines,
+    remove_multiple_spaces,
+]
+
 # Define LLM
 def llm(temperature):
     return ChatOpenAI(
@@ -143,8 +169,10 @@ def llm(temperature):
 def load_data():
     documents = []
     # load SuperBook documents
-    pdfloader = DirectoryLoader("docs", glob="**/*.pdf", loader_cls=PyMuPDFLoader)
-    documents.extend(pdfloader.load())
+    txt_loader = DirectoryLoader("docs", glob="**/*.txt", loader_cls=TextLoader)
+    documents.extend(txt_loader.load())
+    docx_loader = DirectoryLoader("docs", glob="**/*.docx", loader_cls=Docx2txtLoader)
+    documents.extend(docx_loader.load())
     # load CBN Faith section
     webloader = WebBaseLoader([
         "https://www2.cbn.com/lp/faith-homepage", 
@@ -159,19 +187,11 @@ def load_data():
         "https://www2.cbn.com/article/bible-says/bible-verses-about-prayer-praying",
         "https://www2.cbn.com/resources/ebook/perfect-timing-discover-key-answered-prayer",
         "https://www2.cbn.com/article/purpose/seven-keys-hearing-gods-voice",
-        "https://cbn.com/superbook/faq-episodes.aspx", # FAQ SuperBook
+        # FAQ SuperBook
+        "https://cbn.com/superbook/faq-episodes.aspx", 
         "https://us-en.superbook.cbn.com/faq"
     ])
     documents.extend(webloader.load())
-    cleaning_functions = [
-        fix_tabs,
-        remove_time_codes,
-        remove_stars_from_text,
-        fix_newlines,
-        remove_multiple_newlines,
-        remove_multiple_spaces,
-    ]
-
     docs = clean_text(documents, cleaning_functions)
 
     return docs
@@ -189,7 +209,8 @@ def tiktoken_len(text):
 
 
 # Define documents splitter
-def split_documents(documents, k):
+def split_documents(documents, top_k, search_type):
+    k = 4 if search_type == "score_threshold" else top_k
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=2000/k, 
         chunk_overlap=100/k,
@@ -197,7 +218,7 @@ def split_documents(documents, k):
         separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""],
         add_start_index = True,
     )
-    docs = text_splitter.split_documents(documents)
+    docs = text_splitter.split_documents(documents)   
 
     return docs 
 
@@ -214,7 +235,10 @@ def create_vector_store(docs):
 
 # Define retriever
 def create_retriever(vector_store, search_type, k):
-    retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": k})
+    if search_type == "score_threshold":
+        retriever = vector_store.as_retriever(search_type="similarityatscore_threshold", search_kwargs={"score_threshold": k})
+    else:
+        retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": k})
 
     return retriever
 
@@ -280,7 +304,7 @@ class Chatbot(param.Parameterized):
         self.top_k = k
         self.llm = llm(self.temperature)
         self.data = load_data()
-        self.chunks = split_documents(self.data, self.top_k)
+        self.chunks = split_documents(self.data, self.top_k, self.search_type)
         self.vector_store = create_vector_store(self.chunks)
         self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
@@ -350,11 +374,12 @@ class Chatbot(param.Parameterized):
         df.hist(column='Token Count', bins=40, ax=ax)
         plt.close(fig)  # Close the figure to prevent it from being displayed immediately
         histogram_widget = pn.pane.Matplotlib(fig)
+        k = 4 if self.search_type == "score_threshold" else self.top_k
         return pn.Column(
             pn.Row(
                 pn.Column(
                     pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                    pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {self.top_k} = {2000 / self.top_k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
+                    pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {k} = {2000 / k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
                     pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
                     pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
                     pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
