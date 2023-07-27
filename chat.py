@@ -6,10 +6,6 @@ from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
 
 import panel as pn
-import pandas as pd
-import matplotlib
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import param
 
 from dotenv import load_dotenv 
@@ -41,6 +37,14 @@ select_search_type = pn.widgets.RadioButtonGroup(
     button_style="outline",
     styles={"margin-bottom": "20px"}
 )
+select_top_k = pn.widgets.FloatSlider(
+    name="Number of relevant chunks",
+    start=1, 
+    end=10, 
+    step=1, 
+    value=4, 
+    styles={"font-size": "16px", "margin-bottom": "30px"}
+)
 save_button = pn.widgets.Button(
     name="Save and start", 
     button_type="success", 
@@ -48,6 +52,23 @@ save_button = pn.widgets.Button(
     height=35, 
     styles={"margin": "0 auto"}
 )
+
+def switch_top_k(event):
+    if event.new == "score_threshold":
+        select_top_k.name = "Min score threshold"
+        select_top_k.start = 0.1
+        select_top_k.end = 0.99
+        select_top_k.step = 0.1
+        select_top_k.value = 0.7
+    else:
+        select_top_k.name="Number of relevant chunks"
+        select_top_k.start=1
+        select_top_k.end=10 
+        select_top_k.step=1 
+        select_top_k.value=4 
+
+select_search_type.param.watch(switch_top_k, "value")
+
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
     name="Menu", 
@@ -96,11 +117,11 @@ def get_vector_store():
 
 
 # Define retriever
-def create_retriever(vector_store, search_type):
+def create_retriever(vector_store, search_type, k):
     if search_type == "score_threshold":
-        retriever = vector_store.as_retriever(search_type="similarityatscore_threshold", search_kwargs={"score_threshold": 0.7})
+        retriever = vector_store.as_retriever(search_type="similarity_score_threshold", search_kwargs={"score_threshold": k})
     else:
-        retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": 4})
+        retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": k})
 
     return retriever
 
@@ -158,14 +179,15 @@ class Chatbot(param.Parameterized):
     db_response = param.List([])
     chat_history = param.List([])
     
-    def __init__(self, t, c, s, **params):
+    def __init__(self, t, c, s, k, **params):
         super(Chatbot, self).__init__(**params)
         self.temperature = t
         self.chain_type = c
         self.search_type = s
+        self.top_k = k
         self.llm = llm(self.temperature)
         self.vector_store = get_vector_store()
-        self.retriever = create_retriever(self.vector_store, self.search_type)
+        self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
 
     def conversation(self, _):
@@ -254,10 +276,10 @@ class Chatbot(param.Parameterized):
 
 # Callback to create a CBN object
 def start(event):
-    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type]:
+    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
         widget.disabled = not widget.disabled
 
-    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value)
+    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
     chat_box = pn.bind(cbn.conversation, send_button)
     chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
     database[0] = pn.Column(
@@ -290,6 +312,7 @@ app = pn.template.FastGridTemplate(
             select_chain_type,
             pn.pane.HTML("Search type:", styles={"font-size": "16px", "margin-bottom": "0"}),
             select_search_type,
+            select_top_k,
             save_button,
             margin=10
         )
@@ -298,4 +321,4 @@ app = pn.template.FastGridTemplate(
 )
 app.main[:3, :6] = pn.Column(menu, ui)
 app.servable()
-# panel serve clas.py --show --autoreload
+# panel serve chat.py --show --autoreload
