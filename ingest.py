@@ -4,7 +4,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 import tiktoken
-import os
 import re
 from dotenv import load_dotenv 
 
@@ -119,25 +118,6 @@ if __name__ == "__main__":
     # clean and split loaded files
     docs = clean_text(documents, cleaning_functions)
     chunks = text_splitter.split_documents(documents)
-
-    # # load txt files
-    # path = os.getcwd() + "/docs/txt/" # folder path 
-    # # iterate through all file
-    # for file in os.listdir(path):
-    #     file_path = f"{path}{file}"
-    #     with open(file_path, 'r') as f:
-    #         text = f.read()
-    #         prepared_text = clean_text(text, cleaning_functions)
-    #     chunks.extend(text_splitter.create_documents([prepared_text], metadatas=[{"source": f"{file}"}]))    
-
-#     print(len(chunks))
-#     print(chunks)
-#     token_counts = [tiktoken_len(doc.page_content) for doc in chunks]
-#     print(token_counts) 
-#     print(f"""Min: {min(token_counts)}
-# Avg: {int(sum(token_counts) / len(token_counts))}
-# Max: {max(token_counts)}""")
-#     print([doc for doc in chunks if tiktoken_len(doc.page_content) == min(token_counts)])
 
     # embed text and store embeddings
     embedding = OpenAIEmbeddings(model="text-embedding-ada-002")

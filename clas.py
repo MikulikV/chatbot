@@ -1,14 +1,9 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.document_loaders import PyMuPDFLoader, DirectoryLoader, WebBaseLoader, Docx2txtLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import DocArrayInMemorySearch
+from langchain.vectorstores.chroma import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.docstore.document import Document
-import tiktoken
-import re
 
 import panel as pn
 import pandas as pd
@@ -23,7 +18,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # WIDGETS
-
 # Sidebar
 select_temperature = pn.widgets.FloatSlider(
     name="Temperature", 
@@ -47,14 +41,6 @@ select_search_type = pn.widgets.RadioButtonGroup(
     button_style="outline",
     styles={"margin-bottom": "20px"}
 )
-select_top_k = pn.widgets.FloatSlider(
-    name="Number of relevant chunks",
-    start=1, 
-    end=10, 
-    step=1, 
-    value=4, 
-    styles={"font-size": "16px", "margin-bottom": "30px"}
-)
 save_button = pn.widgets.Button(
     name="Save and start", 
     button_type="success", 
@@ -62,27 +48,10 @@ save_button = pn.widgets.Button(
     height=35, 
     styles={"margin": "0 auto"}
 )
-
-def switch_top_k(event):
-    if event.new == "score_threshold":
-        select_top_k.name = "Min score threshold"
-        select_top_k.start = 0.1
-        select_top_k.end = 0.99
-        select_top_k.step = 0.1
-        select_top_k.value = 0.7
-    else:
-        select_top_k.name="Number of relevant chunks"
-        select_top_k.start=1
-        select_top_k.end=10 
-        select_top_k.step=1 
-        select_top_k.value=4 
-
-select_search_type.param.watch(switch_top_k, "value")
-
 # Main layout
 menu = pn.widgets.RadioButtonGroup(
     name="Menu", 
-    options=["Conversation", "Database", "Splitter", "Memory"],
+    options=["Conversation", "Database", "Memory"],
     button_type="primary",
     button_style="outline",
     disabled=True,
@@ -100,62 +69,10 @@ send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
 chat = pn.Column(pn.pane.HTML(), pn.Row(question, send_button))
 # Database window
 database = pn.Row(pn.pane.HTML())
-# Splitter window
-splitter = pn.Row(pn.pane.HTML())
 # Chat history window
 chat_history = pn.Row(pn.pane.HTML())
 
 # CLASS CHATBOT
-
-# Cleaning functions
-
-def fix_newlines(text):
-    return re.sub(r"(?<!\n)\n(?!\n)", " ", text)
-
-
-def fix_tabs(text):
-    return re.sub(r"(?<!\t)\t(?!\t)", " ", re.sub(r"\t{2,}", " \t ", text))
-
-
-def remove_multiple_newlines(text):
-    return re.sub(r"\n{2,}", " \n ", text)
-
-
-def remove_multiple_spaces(text):
-    return re.sub(r" +", " ", text)
-
-
-def remove_time_codes(text):
-    return re.sub(r"\d{2}:\d{2}:\d{2}", "", text)
-
-
-def remove_stars_from_text(text):
-    return text.replace("*", "")
-
-
-def clean_text(data, cleaning_functions):
-    prepared_data = []
-    for document in data:
-        for cleaning_function in cleaning_functions:
-            document.page_content = cleaning_function(document.page_content)
-        doc = Document(
-            page_content=document.page_content,
-            metadata=document.metadata
-        )
-        prepared_data.append(doc)
-    
-    return prepared_data
-
-
-cleaning_functions = [
-    fix_tabs,
-    remove_time_codes,
-    remove_stars_from_text,
-    fix_newlines,
-    remove_multiple_newlines,
-    remove_multiple_spaces,
-]
-
 # Define LLM
 def llm(temperature):
     return ChatOpenAI(
@@ -164,86 +81,26 @@ def llm(temperature):
     )
 
 
-# Define data loader
-def load_data():
-    documents = []
-    # load SuperBook documents
-    txt_loader = DirectoryLoader("docs", glob="**/*.txt", loader_cls=TextLoader)
-    documents.extend(txt_loader.load())
-    docx_loader = DirectoryLoader("docs", glob="**/*.docx", loader_cls=Docx2txtLoader)
-    documents.extend(docx_loader.load())
-    # load CBN Faith section
-    webloader = WebBaseLoader([
-        "https://www2.cbn.com/lp/faith-homepage", 
-        "https://www2.cbn.com/faith/devotionals",
-        "https://www2.cbn.com/devotions/god-will-help-you-triumph-over-despair",
-        "https://www2.cbn.com/faith/who-is-jesus",
-        "https://www2.cbn.com/faith/new-christians",
-        "https://www2.cbn.com/lp/faith-coming-back-your-faith",
-        "https://www2.cbn.com/lp/faith-grow-deeper-your-faith",
-        "https://www2.cbn.com/lp/faith-share-your-faith",
-        "https://www2.cbn.com/devotions/trust-god",
-        "https://www2.cbn.com/article/bible-says/bible-verses-about-prayer-praying",
-        "https://www2.cbn.com/resources/ebook/perfect-timing-discover-key-answered-prayer",
-        "https://www2.cbn.com/article/purpose/seven-keys-hearing-gods-voice",
-        # FAQ SuperBook
-        "https://cbn.com/superbook/faq-episodes.aspx", 
-        "https://us-en.superbook.cbn.com/faq"
-        "https://us-en.superbook.cbn.com/congratulations",
-        "https://appscdn.superbook.cbn.com/api/bible/app_qanda.json/?lang=en&f=all&id=1&vid=13653741",
-        "https://appscdn.superbook.cbn.com/api/bible/app_profiles.json/?lang=en&f=all&id=0&sort=null&r=100000&vid=13653741"
-        "https://appscdn.superbook.cbn.com/api/bible/app_games.json/?lang=en&f=trivia&id=0&sort=null&r=100000&vid=13653741&result_version=2",
-        "https://appscdn.superbook.cbn.com/api/bible/app_gospel/?lang=en&vid=13653741",
-        "https://appscdn.superbook.cbn.com/api/bible/app_multimedia.json/?lang=en&f=all&id=0&sort=null&r=100000&vid=13653741"
-    ])
-    documents.extend(webloader.load())
-    docs = clean_text(documents, cleaning_functions)
-
-    return docs
-
-
-# Define length_function for text_splitter
-tokenizer = tiktoken.get_encoding("cl100k_base")
-
-def tiktoken_len(text):
-    tokens = tokenizer.encode(
-        text,
-        disallowed_special=()
-    )
-    return len(tokens)
-
-
-# Define documents splitter
-def split_documents(documents, top_k, search_type):
-    k = 4 if search_type == "score_threshold" else top_k
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=2000/k, 
-        chunk_overlap=100/k,
-        length_function=tiktoken_len,
-        separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""],
-        add_start_index = True,
-    )
-    docs = text_splitter.split_documents(documents)   
-
-    return docs 
-
-
 # Define vector store
-def create_vector_store(docs):
+def get_vector_store():
     # define embedding
     embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
     # create vector database from data
-    vector_store = DocArrayInMemorySearch.from_documents(docs, embeddings)
+    vector_store = Chroma(
+        collection_name="Database",
+        embedding_function=embeddings,
+        persist_directory="docs/chroma",
+    )
     
     return vector_store
 
 
 # Define retriever
-def create_retriever(vector_store, search_type, k):
+def create_retriever(vector_store, search_type):
     if search_type == "score_threshold":
-        retriever = vector_store.as_retriever(search_type="similarityatscore_threshold", search_kwargs={"score_threshold": k})
+        retriever = vector_store.as_retriever(search_type="similarityatscore_threshold", search_kwargs={"score_threshold": 0.7})
     else:
-        retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": k})
+        retriever = vector_store.as_retriever(search_type=search_type, search_kwargs={"k": 4})
 
     return retriever
 
@@ -283,7 +140,6 @@ memory = ConversationBufferWindowMemory(
 
 # Define chain
 def create_chain(llm, retriever, chain_type):    
-    # create a chatbot chain. Memory is managed externally.
     chain = RetrievalQA.from_chain_type(
         llm=llm, 
         chain_type=chain_type, 
@@ -302,17 +158,14 @@ class Chatbot(param.Parameterized):
     db_response = param.List([])
     chat_history = param.List([])
     
-    def __init__(self, t, c, s, k, **params):
+    def __init__(self, t, c, s, **params):
         super(Chatbot, self).__init__(**params)
         self.temperature = t
         self.chain_type = c
         self.search_type = s
-        self.top_k = k
         self.llm = llm(self.temperature)
-        self.data = load_data()
-        self.chunks = split_documents(self.data, self.top_k, self.search_type)
-        self.vector_store = create_vector_store(self.chunks)
-        self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
+        self.vector_store = get_vector_store()
+        self.retriever = create_retriever(self.vector_store, self.search_type)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
 
     def conversation(self, _):
@@ -372,30 +225,6 @@ class Chatbot(param.Parameterized):
             ))
         return pn.Column(pn.layout.Divider(), *rlist)
     
-    def count_tokens(self):
-        chunks = [tiktoken_len(doc.page_content) for doc in self.chunks]
-        df = pd.DataFrame({'Token Count': chunks})
-        # Create a histogram of the token count distribution
-        fig = plt.figure(figsize=(3.5, 2.5))
-        ax = fig.add_subplot()
-        df.hist(column='Token Count', bins=40, ax=ax)
-        plt.close(fig)  # Close the figure to prevent it from being displayed immediately
-        histogram_widget = pn.pane.Matplotlib(fig)
-        k = 4 if self.search_type == "score_threshold" else self.top_k
-        return pn.Column(
-            pn.Row(
-                pn.Column(
-                    pn.pane.HTML("Documents were splitted into chunks.", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                    pn.pane.HTML(f"<b>Selected chunk size</b> = 2000 / {k} = {2000 / k}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                    pn.pane.HTML(f"<b>Min</b> = {min(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                    pn.pane.HTML(f"<b>Avg</b> = {int(sum(chunks) / len(chunks))}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                    pn.pane.HTML(f"<b>Max</b> = {max(chunks)}", styles={"margin-bottom": "20px", "font-size": "16px"}),
-                ),
-                histogram_widget,
-            ),
-            pn.pane.HTML(f"Array of chunks: {chunks}")
-        )
-    
     
     @param.depends('chat_history')
     def get_history(self):
@@ -425,18 +254,15 @@ class Chatbot(param.Parameterized):
 
 # Callback to create a CBN object
 def start(event):
-    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
+    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type]:
         widget.disabled = not widget.disabled
 
-    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
+    cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value)
     chat_box = pn.bind(cbn.conversation, send_button)
     chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
     database[0] = pn.Column(
         pn.panel(cbn.get_last_question),
         pn.panel(cbn.get_sources),
-    )
-    splitter[0] = pn.Column(
-        pn.panel(cbn.count_tokens)
     )
     chat_history[0] = pn.Column(
         pn.panel(cbn.get_history),
@@ -447,7 +273,7 @@ save_button.on_click(start)
 
 # Callback to switch between chat, database and history
 def switch_ui(event):
-    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else (splitter if event.new == 'Splitter' else chat_history))
+    ui[0] = chat if event.new == 'Conversation' else (database if event.new == 'Database' else chat_history)
 
 # Watcher to look after menu.value
 menu.param.watch(switch_ui, "value", onlychanged=False)
@@ -464,7 +290,6 @@ app = pn.template.FastGridTemplate(
             select_chain_type,
             pn.pane.HTML("Search type:", styles={"font-size": "16px", "margin-bottom": "0"}),
             select_search_type,
-            select_top_k,
             save_button,
             margin=10
         )
