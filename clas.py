@@ -9,7 +9,6 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.docstore.document import Document
 import tiktoken
 import re
-import os
 
 import panel as pn
 import pandas as pd
@@ -255,7 +254,8 @@ prompt = PromptTemplate(
     template="""
 You are personal assistant named Gizmo like a character from SuperBook who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
 You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions.
-Answer as a deep believer, but not any other way. Do not answer like a pirate or someone else.
+Always answer as helpfully as possible in the manner of a deep believer only, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
 Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question:
 ------
 <ctx>
@@ -315,7 +315,8 @@ class Chatbot(param.Parameterized):
         self.retriever = create_retriever(self.vector_store, self.search_type, self.top_k)
         self.qa = create_chain(self.llm, self.retriever, self.chain_type)
 
-    def conversation(self, query):
+    def conversation(self, _):
+        query = question.value
         if query:
             response = self.qa({"query": query})
             self.chat_history = self.qa.combine_documents_chain.memory.chat_memory.messages
@@ -428,7 +429,7 @@ def start(event):
         widget.disabled = not widget.disabled
 
     cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
-    chat_box = pn.bind(cbn.conversation, question)
+    chat_box = pn.bind(cbn.conversation, send_button)
     chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
     database[0] = pn.Column(
         pn.panel(cbn.get_last_question),
