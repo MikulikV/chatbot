@@ -321,4 +321,4 @@ app = pn.template.FastGridTemplate(
 )
 app.main[:3, :6] = pn.Column(menu, ui)
 app.servable()
-# panel serve chat.py --show --autoreload
+# python -m panel serve chat.py --show --autoreload
