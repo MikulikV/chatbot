@@ -8,10 +8,12 @@ from langchain.memory import ConversationBufferWindowMemory
 import panel as pn
 import param
 
+import os
 from dotenv import load_dotenv 
 
 # OPENAI_API_KEY
 load_dotenv()
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 # WIDGETS
 # Sidebar
