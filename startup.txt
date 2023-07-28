@@ -1,1 +1,1 @@
-python -m panel serve chat.py --address 0.0.0.0 --port 8000 --allow-websocket-origin=app-name.azurewebsites.net
+python -m panel serve app/chat.py --address 0.0.0.0 --port 8000 --allow-websocket-origin=gizmo-chat.azurewebsites.net
