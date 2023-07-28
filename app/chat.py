@@ -4,10 +4,8 @@ from langchain.vectorstores.chroma import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
-
 import panel as pn
 import param
-
 import os
 from dotenv import load_dotenv 
 
