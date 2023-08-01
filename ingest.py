@@ -117,13 +117,14 @@ if __name__ == "__main__":
     documents.extend(txt_loader.load())
     # clean and split loaded files
     docs = clean_text(documents, cleaning_functions)
-    chunks = text_splitter.split_documents(documents)
+    chunks = text_splitter.split_documents(docs)
+    result_chunks = [doc for doc in chunks if tiktoken_len(doc.page_content) >= 100] # chunks more than chunk_overlap
 
     # embed text and store embeddings
     embedding = OpenAIEmbeddings(model="text-embedding-ada-002")
     persist_directory="docs/chroma"
     vector_store = Chroma.from_documents(
-        documents=chunks,
+        documents=result_chunks,
         embedding=embedding,
         collection_name="Database",
         persist_directory=persist_directory,

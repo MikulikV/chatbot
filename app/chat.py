@@ -40,7 +40,7 @@ select_search_type = pn.widgets.RadioButtonGroup(
 select_top_k = pn.widgets.FloatSlider(
     name="Number of relevant chunks",
     start=1, 
-    end=10, 
+    end=5, 
     step=1, 
     value=4, 
     styles={"font-size": "16px", "margin-bottom": "30px"}
@@ -130,11 +130,27 @@ def create_retriever(vector_store, search_type, k):
 prompt = PromptTemplate(
     input_variables=["history", "context", "question"],
     template="""
-You are personal assistant named Gizmo like a character from SuperBook who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
-You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions.
-Always answer as helpfully as possible in the manner of a deep believer only, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
-Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question:
+% INSTRUCTIONS
+- You are personal assistant named CBN Assistant who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
+- You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. 
+- Always answer as helpfully as possible only in the manner of a deep believer, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+- Answer in question's language.
+- Use the following chain of thought for specific questions:
+
+Data: [chat history, context you are provided, your own knowledge base]
+Question: the input you must answer
+Thought: you should always think about what to do
+Action: look for the answer in one of the Data elements.
+Observation: the result of the action
+... (repeat this Thought/Action/Observation for all the elements in Data)
+Action: evaluate the answers and choose the best one
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+- Your output is the final answer.
+
+% YOUR TASK
+1. Answer a follow up question as best you can. You have access to the following conversation (delimited by <hs></hs>) and context (delimited by <ctx></ctx>):
 ------
 <ctx>
 {context}
@@ -144,9 +160,11 @@ Use the following context (delimited by <ctx></ctx>) and the chat history (delim
 {history}
 </hs>
 ------
-{question}
-If it's not enough to answer the question use your own memory. Answer in question's language.
+Follow Up Input: {question}
 Answer:
+
+2. If necessary you can provide a link after answer the question related to the Bible or CBN to learn more. For example, if the question about faith: https://www2.cbn.com/search/faith?search=faith".
+For questions about the SuperBook you can provide https://us-en.superbook.cbn.com/. 
 """,
 )
 
@@ -213,7 +231,7 @@ class Chatbot(param.Parameterized):
             show_names=False,
             allow_input=False,
             ascending=True,
-            height = 280
+            height=280
         )
     
     @param.depends('db_query')
@@ -317,8 +335,8 @@ app = pn.template.FastGridTemplate(
             margin=10
         )
     ],
-    main_max_width="900px",
+    main_max_width="100%",
 )
-app.main[:3, :6] = pn.Column(menu, ui)
+app.main[:5, :] = pn.Column(menu, ui)
 app.servable()
-# python -m panel serve chat.py --show --autoreload
+# python -m panel serve app/chat.py --show --autoreload
