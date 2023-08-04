@@ -10,8 +10,6 @@ from langchain.schema import HumanMessage, AIMessage
 from langchain.memory import ConversationSummaryBufferMemory, ConversationBufferWindowMemory
 import tiktoken
 import re
-import os
-import glob
 
 from dotenv import load_dotenv 
 
