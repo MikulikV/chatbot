@@ -63,7 +63,7 @@ def switch_top_k(event):
     else:
         select_top_k.name="Number of relevant chunks"
         select_top_k.start=1
-        select_top_k.end=10 
+        select_top_k.end=5
         select_top_k.step=1 
         select_top_k.value=4 
 
@@ -80,18 +80,20 @@ menu = pn.widgets.RadioButtonGroup(
 )
 ui = pn.Column(
     pn.Column(
-        pn.pane.HTML("<h1>To start conversation set up your settings</h1>", width=820, styles={"text-align": "center"}),
+        pn.pane.HTML("<h1>To start conversation set up your settings</h1>", styles={"text-align": "center", "width": "100%"}),
         pn.pane.Image("assets/gizmo.png", width=200, height=200, styles={"margin": "0 auto"}),
-    )
+        styles={"width": "100%"},
+    ),
+    styles={"width": "100%", "min-height": "40%"},
 )
 # Conversation window
-question = pn.widgets.TextInput(value="", placeholder="Send a message", width=720, height=40, disabled=True)
-send_button = pn.widgets.Button(name="Send", width=80, height=40, disabled=True)
-chat = pn.Column(pn.pane.HTML(), pn.Row(question, send_button))
+question = pn.widgets.TextInput(value="", placeholder="Send a message", styles={"min-width": "87%", "height": "40px"}, disabled=True)
+send_button = pn.widgets.Button(name="Send", styles={"min-width": "10%", "height": "40px"}, disabled=True)
+chat = pn.Column(pn.pane.HTML(), pn.Row(question, send_button, styles={"width": "100%"}), styles={"width": "100%", "height": "100%"})
 # Database window
-database = pn.Row(pn.pane.HTML())
+database = pn.Row(pn.pane.HTML(), styles={"width": "100%"})
 # Chat history window
-chat_history = pn.Row(pn.pane.HTML())
+chat_history = pn.Row(pn.pane.HTML(), styles={"width": "100%"})
 
 # CLASS CHATBOT
 # Define LLM
@@ -133,7 +135,7 @@ prompt = PromptTemplate(
 % INSTRUCTIONS
 - You are personal assistant named CBN Assistant who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
 - You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. 
-- Always answer as helpfully as possible only in the manner of a deep believer. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+- Always answer as helpfully as possible. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 - If you don't know the answer to a question, please don't share false information.
 - Pretend like a Christian Broadcasting Network employee.
 - Answer in question's language.
@@ -159,11 +161,12 @@ Step 3: give the final result
 Follow Up Input: {question}
 Answer:
 
-2. If necessary you can provide a link after answer the question related to the Bible, Jesus or CBN to learn more. For example, if the question about faith: "Learn more: https://www2.cbn.com/search/faith?search=faith".
-For questions about the SuperBook you can provide "Learn more: https://us-en.superbook.cbn.com". 
+2. a) If necessary you can provide a link after answer the question related to the Bible, Jesus or CBN to learn more. For example, if the question about faith provide: https://www2.cbn.com/search/faith?search=faith.
+b) If you are asked about certain episode of the SuperBook, for example, episode "ROAR!", you can provide: https://us-en.superbook.cbn.com/gizmonote/g107 or https://us-en.superbook.cbn.com". 
+c) Always use this structure for providing links: "Learn more: ```link```".
 
 % YOUR RESULT
-final result
+the final result
 """,
 )
 
@@ -230,16 +233,17 @@ class Chatbot(param.Parameterized):
             show_names=False,
             allow_input=False,
             ascending=True,
-            height=280
+            styles={"height": "95%"}
         )
     
     @param.depends('db_query')
     def get_last_question(self):
         if not self.db_query:
             return pn.Column(
-                pn.pane.HTML("<h2>There is no information retrieved from your database</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>There is no information retrieved from your database</h2>", styles={"text-align": "center", "width": "100%"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", styles={"text-align": "center", "width": "100%"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
+                styles={"width": "100%"}
             )
         return pn.Row(
             pn.pane.HTML("<b>DB query:</b>", styles={"font_size": "16px", "margin": "5px 10px"}),
@@ -269,9 +273,10 @@ class Chatbot(param.Parameterized):
     def get_history(self):
         if not self.chat_history:
             return pn.Column(
-                pn.pane.HTML("<h2>There is no chat history</h2>", width=820, styles={"text-align": "center"}),
-                pn.pane.HTML("<h2>Please start conversation</h2>", width=820, styles={"text-align": "center"}),
+                pn.pane.HTML("<h2>There is no chat history</h2>", styles={"text-align": "center", "width": "100%"}),
+                pn.pane.HTML("<h2>Please start conversation</h2>", styles={"text-align": "center", "width": "100%"}),
                 pn.pane.Image("assets/thinking.png", width=100, height=100, styles={"margin": "0 auto"}),
+                styles={"width": "100%"}
             )
         rlist=[]
         for message in self.chat_history:
@@ -298,13 +303,15 @@ def start(event):
 
     cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)
     chat_box = pn.bind(cbn.conversation, send_button)
-    chat[0] = pn.panel(chat_box, loading_indicator=True, height=335)
+    chat[0] = pn.panel(chat_box, loading_indicator=True, styles={"width": "100%", "height": "90%"})
     database[0] = pn.Column(
-        pn.panel(cbn.get_last_question),
-        pn.panel(cbn.get_sources),
+        pn.panel(cbn.get_last_question, styles={"width": "100%"}),
+        pn.panel(cbn.get_sources, styles={"width": "100%"}),
+        styles={"width": "100%"}
     )
     chat_history[0] = pn.Column(
-        pn.panel(cbn.get_history),
+        pn.panel(cbn.get_history, styles={"width": "100%"}),
+        styles={"width": "100%"}
     )
     menu.value = menu.value
  
@@ -336,6 +343,6 @@ app = pn.template.FastGridTemplate(
     ],
     main_max_width="100%",
 )
-app.main[:5, :] = pn.Column(menu, ui)
+app.main[:6, :] = pn.Column(menu, ui, styles={"width": "100%", "height": "100%"})
 app.servable()
 # python -m panel serve app/chat.py --show --autoreload
