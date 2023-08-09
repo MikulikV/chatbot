@@ -1,7 +1,7 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.vectorstores.chroma import Chroma
-from langchain.chains import RetrievalQA
+from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
 import panel as pn
@@ -128,52 +128,55 @@ def create_retriever(vector_store, search_type, k):
     return retriever
 
 
-# Define propmpt
+# Define prompts
+q_prompt = PromptTemplate(
+    input_variables=["chat_history", "question"],
+    template="""
+Given the following conversation (delimited by <hs></hs>) and a follow up question, rephrase the follow up question to be a standalone question.
+------
+<hs>
+{chat_history}
+</hs>
+------
+Follow Up Question: {question}
+Standalone question:
+"""
+)
 prompt = PromptTemplate(
-    input_variables=["history", "context", "question"],
+    input_variables=["chat_history", "context", "question"],
     template="""
 % INSTRUCTIONS
 - You are personal assistant named CBN Assistant who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
 - You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. 
-- Always answer as helpfully as possible. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
-- If you don't know the answer to a question, please don't share false information.
-- Pretend like a Christian Broadcasting Network employee.
+- Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+- Always think step by step. If you don't know the answer to a question, please don't share false information.
+- Answer like a Christian Broadcasting Network employee.
 
-% YOUR TASK
-1. Answer the question using the following chain of thought (delimited by <cot></cot>), but you must hide this answer updation process from end users:
-------
-<cot>
-Think step by step:
-Step 1: given the following conversation (delimited by <hs></hs>) and a follow up question, make a new question (if it's needed)
-Step 2: think what is your task, if it's not clear ask user for more details
-Step 3: complete the task using only your knowledge base
-Step 4: original answer - result of step 2
-Step 5: if you need more information look at the information in the context (delimited by <ctx></ctx>)
-Step 6: given the context from step 3, refine the existing answer to be better, if the context isn't useful print the original answer
-Step 7: think what was your task again. Is your answer good? If it's not, ask user for more details
-Step 8: give your final answer
-</cot>
+% YOUR TASKS
+1. Answer the question at the end as helpfully as possible. You can use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>).
+If the question is "What is your question?", ask for more details.
 ------
 <ctx>
 {context}
 </ctx>
 ------
 <hs>
-{history}
+{chat_history}
 </hs>
 ------
 Question: {question}
 Answer in the language of the question:
 
 2. a) If necessary you can provide a link after answer the question related to the Bible, Jesus or CBN to learn more. For example, if the question about faith provide: https://www2.cbn.com/search/faith?search=faith.
-b) If you are asked about certain episode of the SuperBook, for example, episode "ROAR!", you can provide: https://us-en.superbook.cbn.com/gizmonote/g107 or https://us-en.superbook.cbn.com". 
+b) If the conversation is about certain episode of the SuperBook, for example, episode "ROAR!", you can provide: https://us-en.superbook.cbn.com/gizmonote/g107 or https://us-en.superbook.cbn.com". 
 """,
 )
 
 # Define memory
 memory = ConversationBufferWindowMemory( 
-    memory_key="history", 
-    input_key='question',  
+    memory_key="chat_history", 
+    input_key='question', 
+    output_key='answer', 
     return_messages=True,
     k=6
 )
@@ -181,12 +184,16 @@ memory = ConversationBufferWindowMemory(
 
 # Define chain
 def create_chain(llm, retriever, chain_type):    
-    chain = RetrievalQA.from_chain_type(
+    chain = ConversationalRetrievalChain.from_llm(
         llm=llm, 
         chain_type=chain_type, 
         retriever=retriever, 
+        condense_question_prompt=q_prompt,
+        combine_docs_chain_kwargs={"prompt": prompt}, 
+        memory=memory,
+        get_chat_history=lambda h:h,
         return_source_documents=True,
-        chain_type_kwargs={"memory": memory, "prompt": prompt},
+        return_generated_question=True,
     )
     return chain
 
@@ -213,11 +220,11 @@ class Chatbot(param.Parameterized):
     def conversation(self, _):
         query = question.value
         if query:
-            response = self.qa({"query": query})
-            self.chat_history = self.qa.combine_documents_chain.memory.chat_memory.messages
-            self.db_query = response["query"]
+            response = self.qa({"question": query})
+            self.chat_history = response["chat_history"]
+            self.db_query = response["generated_question"]
             self.db_response = response["source_documents"]
-            self.answer = response['result'] 
+            self.answer = response["answer"] 
             self.panels.extend([
                 {"You": query},
                 {"Gizmo": self.answer},

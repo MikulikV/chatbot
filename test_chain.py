@@ -112,41 +112,58 @@ def create_retriever(vector_store, search_type, k):
 template = """
 You are personal assistant named Gizmo like a character from SuperBook who is designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
 You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions.
-Answer as a deep believer, but not any other way. Do not answer like a pirate or someone else.
-Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question:
+Use the following context (delimited by <ctx></ctx>) and the chat history (delimited by <hs></hs>) to answer the question at the end.
+If you don't know the answer, just say you don't know. DO NOT try to make up an answer.
+If the question is not related to the context, politely respond that you are tuned to only answer questions that are related to the context.
 ------
 <ctx>
 {context}
 </ctx>
 ------
 <hs>
-{history}
+{chat_history}
 </hs>
 ------
 {question}
-If it's not enough to answer the question use your own memory.
 Answer:
 """
 prompt = PromptTemplate(
-    input_variables=["history", "context", "question"],
+    input_variables=["chat_history", "context", "question"],
     template=template,
+)
+q_prompt = PromptTemplate(
+    input_variables=["chat_history", "question"],
+    template="""
+Combine the chat history (delimited by <hs></hs>) and follow up question into a standalone question
+------
+<hs>
+{chat_history}
+</hs>
+------
+Follow up question: {question}
+Standalone question:
+"""
 )
 
 memory = ConversationBufferWindowMemory( 
-    memory_key="history", 
-    input_key='question',  
+    memory_key="chat_history", 
+    input_key='question', 
+    output_key='answer',
     return_messages=True,
     k=6
 )
 # Define chain
 def create_chain(retriever, temperature, chain_type):    
-    # create a chatbot chain. Memory is managed externally.
-    chain = RetrievalQA.from_chain_type(
+    chain = ConversationalRetrievalChain.from_llm(
         llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=temperature), 
         chain_type=chain_type, 
         retriever=retriever, 
         return_source_documents=True,
-        chain_type_kwargs={"memory": memory, "prompt": prompt, "verbose": True}
+        condense_question_prompt=q_prompt,
+        combine_docs_chain_kwargs={"prompt": prompt}, 
+        memory=memory,
+        get_chat_history=lambda h:h,
+        return_generated_question=True,
     )
     return chain
 
@@ -157,13 +174,13 @@ if __name__ == "__main__":
 
     source_urls = [
         "https://www2.cbn.com/lp/faith-homepage", 
-        "https://www2.cbn.com/devotions/god-will-help-you-triumph-over-despair",
-        "https://www2.cbn.com/faith/who-is-jesus",
-        "https://www2.cbn.com/faith/new-christians",
-        "https://www2.cbn.com/lp/faith-coming-back-your-faith",
-        "https://www2.cbn.com/lp/faith-grow-deeper-your-faith",
-        "https://www2.cbn.com/lp/faith-share-your-faith",
-        "https://cbn.com/superbook/faq-episodes.aspx"
+        # "https://www2.cbn.com/devotions/god-will-help-you-triumph-over-despair",
+        # "https://www2.cbn.com/faith/who-is-jesus",
+        # "https://www2.cbn.com/faith/new-christians",
+        # "https://www2.cbn.com/lp/faith-coming-back-your-faith",
+        # "https://www2.cbn.com/lp/faith-grow-deeper-your-faith",
+        # "https://www2.cbn.com/lp/faith-share-your-faith",
+        # "https://cbn.com/superbook/faq-episodes.aspx"
     ]
 
     chunks = load_data(source_urls, 4)
@@ -177,7 +194,7 @@ if __name__ == "__main__":
         question = input("Question: ")
 
         # Generate answer
-        response = chain({"query": question})
+        response = chain({"question": question})
         # chat_history.append(HumanMessage(content=question))
         # chat_history.append(AIMessage(content=response["result"]))
 
@@ -191,10 +208,10 @@ if __name__ == "__main__":
         #     print(f"Text chunk: {document.page_content}...\n")
         print(f"Answer: {response}")
         print()
-        print(f"Result: {response['result']}")
-        print(chain)
-        print(chain.combine_documents_chain.llm_chain.prompt.template)
-        print(chain.combine_documents_chain.memory.chat_memory.messages)
+        print(f"Result: {response['answer']}")
+        # print(chain)
+        # print(chain.combine_documents_chain.llm_chain.prompt.template)
+        # print(chain.combine_documents_chain.memory.chat_memory.messages)
 
 
 
