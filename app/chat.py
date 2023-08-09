@@ -1,9 +1,10 @@
 from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 from langchain.vectorstores.chroma import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferWindowMemory
+from langchain.memory import ConversationTokenBufferMemory
 import panel as pn
 import param
 import os
@@ -174,12 +175,13 @@ b) If the conversation is about certain episode of the SuperBook, for example, e
 )
 
 # Define memory
-memory = ConversationBufferWindowMemory( 
+memory = ConversationTokenBufferMemory( 
+    llm=OpenAI(),
     memory_key="chat_history", 
     input_key='question', 
     output_key='answer', 
     return_messages=True,
-    k=6
+    max_token_limit=1500
 )
 
 
