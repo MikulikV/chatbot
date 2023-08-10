@@ -1,4 +1,4 @@
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 from langchain.vectorstores.chroma import Chroma
@@ -108,7 +108,7 @@ def llm(temperature):
 # Define vector store
 def get_vector_store():
     # define embedding
-    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
+    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
     # create vector database from data
     vector_store = Chroma(
         collection_name="Database",

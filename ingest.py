@@ -1,7 +1,7 @@
 from langchain.document_loaders import WebBaseLoader, DirectoryLoader, Docx2txtLoader, TextLoader
 from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
+from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import Chroma
 import tiktoken
 import re
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     result_chunks = [doc for doc in chunks if tiktoken_len(doc.page_content) >= 100] # chunks more than chunk_overlap
 
     # embed text and store embeddings
-    embedding = OpenAIEmbeddings(model="text-embedding-ada-002")
+    embedding = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
     persist_directory="docs/chroma"
     vector_store = Chroma.from_documents(
         documents=result_chunks,
