@@ -3,7 +3,6 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain.vectorstores import Chroma
-import tiktoken
 import re
 from dotenv import load_dotenv 
 
@@ -51,20 +50,9 @@ def clean_text(data, cleaning_functions):
     return prepared_data
 
 
-# function to count the tokens and text splitter
-tokenizer = tiktoken.get_encoding("cl100k_base")
-
-def tiktoken_len(text):
-    tokens = tokenizer.encode(
-        text,
-        disallowed_special=()
-    )
-    return len(tokens)
-
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=100,
-    length_function=tiktoken_len,
     separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""], 
     add_start_index = True,
 )
@@ -118,7 +106,7 @@ if __name__ == "__main__":
     # clean and split loaded files
     docs = clean_text(documents, cleaning_functions)
     chunks = text_splitter.split_documents(docs)
-    result_chunks = [doc for doc in chunks if tiktoken_len(doc.page_content) >= 100] # chunks more than chunk_overlap
+    result_chunks = [doc for doc in chunks if len(doc.page_content) >= 100] # chunks more than chunk_overlap
 
     # embed text and store embeddings
     embedding = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
