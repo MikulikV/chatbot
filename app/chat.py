@@ -1,4 +1,4 @@
-from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 from langchain.vectorstores.chroma import Chroma
@@ -29,6 +29,7 @@ select_chain_type = pn.widgets.RadioButtonGroup(
     options=["stuff", "map_reduce", "refine", "map_rerank"],
     button_type="primary",
     button_style="outline",
+    disabled=True,
     styles={"margin-bottom": "20px"}
 )
 select_search_type = pn.widgets.RadioButtonGroup(
@@ -108,7 +109,7 @@ def llm(temperature):
 # Define vector store
 def get_vector_store():
     # define embedding
-    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
     # create vector database from data
     vector_store = Chroma(
         collection_name="Database",
@@ -308,7 +309,7 @@ class Chatbot(param.Parameterized):
 
 # Callback to create a CBN object
 def start(event):
-    for widget in [menu, question, send_button, save_button, select_temperature, select_chain_type, select_search_type, select_top_k]:
+    for widget in [menu, question, send_button, save_button, select_temperature, select_search_type, select_top_k]:
         widget.disabled = not widget.disabled
 
     cbn = Chatbot(select_temperature.value, select_chain_type.value, select_search_type.value, select_top_k.value)

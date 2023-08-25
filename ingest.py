@@ -1,9 +1,10 @@
 from langchain.document_loaders import WebBaseLoader, DirectoryLoader, Docx2txtLoader, TextLoader
 from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 import re
+import tiktoken
 from dotenv import load_dotenv 
 
 # functions to prepare the data
@@ -49,11 +50,21 @@ def clean_text(data, cleaning_functions):
     
     return prepared_data
 
+# function to count the tokens and text splitter
+tokenizer = tiktoken.get_encoding("cl100k_base")
+def tiktoken_len(text):
+    tokens = tokenizer.encode(
+        text,
+        disallowed_special=()
+    )
+    return len(tokens)
+
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=100,
-    separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""], 
+    separators=["\n\n", "\n", "(?<=\.)", "(?<=\!)", "(?<=\?)", "(?<=\,)", " ", ""],
+    length_function=tiktoken_len, 
     add_start_index = True,
 )
 
@@ -106,10 +117,10 @@ if __name__ == "__main__":
     # clean and split loaded files
     docs = clean_text(documents, cleaning_functions)
     chunks = text_splitter.split_documents(docs)
-    result_chunks = [doc for doc in chunks if len(doc.page_content) >= 100] # chunks more than chunk_overlap
+    result_chunks = [doc for doc in chunks if tiktoken_len(doc.page_content) >= 100] # chunks more than chunk_overlap
 
     # embed text and store embeddings
-    embedding = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    embedding = OpenAIEmbeddings(model="text-embedding-ada-002")
     persist_directory="docs/chroma"
     vector_store = Chroma.from_documents(
         documents=result_chunks,
